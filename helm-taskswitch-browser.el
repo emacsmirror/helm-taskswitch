@@ -1,8 +1,12 @@
 ;;; helm-taskswitch-browser.el --- Browser tabs for helm-taskswitch over a WebSocket  -*- lexical-binding: t -*-
 
 ;; Author: Brian Caruso <briancaruso@gmail.com>
+;; Maintainer: Brian Caruso <briancaruso@gmail.com>
+;; Created: 2026-11-03
 ;; URL: https://github.com/bdc34/helm-taskswitch
+;; Package-Version: 2.1.0
 ;; Package-Requires: ((emacs "28.1") (websocket "1.15"))
+;; Keywords: frames
 
 ;; This file is NOT part of GNU Emacs.
 ;;
@@ -27,10 +31,13 @@
 ;; open, reload, duplicate, mute).
 ;;
 ;; Setup:
-;;   1. M-x helm-taskswitch-browser-install, which writes the extension's
-;;      config.js with the port and a secret token.
+;;   1. M-x helm-taskswitch-browser-install, which copies the extension
+;;      to `helm-taskswitch-browser-extension-dir' (by default
+;;      ~/.local/share/helm-taskswitch/browser-extension) and writes its
+;;      config.js there with the port and a secret token.
 ;;   2. In chrome://extensions, turn on Developer mode, then "Load
-;;      unpacked" and choose the browser-extension/ directory.
+;;      unpacked" and choose that directory.  After upgrading this
+;;      package, run the install command again and reload the extension.
 ;;   3. Turn on `helm-taskswitch-browser-mode' (in your init file, so it
 ;;      is on whenever Emacs runs).
 ;;   4. M-x helm-taskswitch-browser-status shows connected browsers.
@@ -74,13 +81,36 @@ It is created, readable only by you, the first time it is needed."
   :type 'file
   :group 'helm-taskswitch-browser)
 
-(defcustom helm-taskswitch-browser-extension-dir
+(defvar helm-taskswitch-browser--source-dir
   (expand-file-name "browser-extension"
                     (file-name-directory (or load-file-name buffer-file-name
                                              default-directory)))
-  "Directory of the browser extension, where config.js is written."
+  "The extension's files as shipped with this package.")
+
+(defcustom helm-taskswitch-browser-extension-dir
+  (expand-file-name "helm-taskswitch/browser-extension"
+                    (or (getenv "XDG_DATA_HOME") "~/.local/share"))
+  "Directory Chrome loads the extension from.
+`helm-taskswitch-browser-install' copies the extension here and
+writes its config.js here.  It is outside the package directory
+because package.el deletes that on every upgrade, which would break
+the extension in Chrome.
+
+To work on the extension itself, set this to the browser-extension/
+directory of your git checkout; install then only writes config.js."
   :type 'directory
   :group 'helm-taskswitch-browser)
+
+(defun helm-taskswitch-browser--manifest-version (dir)
+  "Return the version in DIR's manifest.json, or nil."
+  (ignore-errors
+    (with-temp-buffer
+      (insert-file-contents (expand-file-name "manifest.json" dir))
+      (alist-get 'version (json-parse-buffer :object-type 'alist)))))
+
+(defvar helm-taskswitch-browser--bundled-version
+  (helm-taskswitch-browser--manifest-version helm-taskswitch-browser--source-dir)
+  "Version of the extension shipped with this package.")
 
 (defcustom helm-taskswitch-browser-log nil
   "When non-nil, log connections and messages with `message'."
@@ -226,8 +256,14 @@ Keys: :origin-ok, :authed, :browser, :started-at, :opened, :last-seen,
       ;; extension does not reconnect in a tight loop.
       (helm-taskswitch-browser--send-json
        ws `((type . "welcome") (protocol . ,helm-taskswitch-browser-protocol)))
-      (message "helm-taskswitch-browser: %s connected"
-               (alist-get 'browser msg))))))
+      (let ((version (alist-get 'extensionVersion msg)))
+        (if (and helm-taskswitch-browser--bundled-version
+                 (not (equal version helm-taskswitch-browser--bundled-version)))
+            (message "helm-taskswitch-browser: %s connected with extension %s, but this package has %s; run M-x helm-taskswitch-browser-install and reload the extension"
+                     (alist-get 'browser msg) version
+                     helm-taskswitch-browser--bundled-version)
+          (message "helm-taskswitch-browser: %s connected"
+                   (alist-get 'browser msg))))))))
 
 (defun helm-taskswitch-browser--on-message (ws frame)
   "Handle a message FRAME from WS."
@@ -405,15 +441,34 @@ CALLBACK are as for `helm-taskswitch-browser-send'; tabId is added."
 
 ;;;; Install and status
 
+(defun helm-taskswitch-browser--copy-extension (from to)
+  "Copy the extension's files FROM the package directory TO.
+config.js is never copied, so the one in TO is kept."
+  (with-file-modes #o700
+    (make-directory to t))
+  (dolist (file (directory-files from t directory-files-no-dot-files-regexp))
+    (let ((dest (expand-file-name (file-name-nondirectory file) to)))
+      (cond ((equal (file-name-nondirectory file) "config.js"))
+            ((file-directory-p file)
+             (copy-directory file dest nil t t))
+            (t (copy-file file dest t t))))))
+
 ;;;###autoload
 (defun helm-taskswitch-browser-install ()
-  "Write the extension's config.js and show how to load the extension."
+  "Install the extension's files and config.js, and show how to load it.
+Copies the extension from the package to
+`helm-taskswitch-browser-extension-dir', and writes config.js there
+with the port and token.  Run it again after upgrading this package,
+then reload the extension in Chrome."
   (interactive)
-  (let ((config (expand-file-name "config.js"
-                                  helm-taskswitch-browser-extension-dir)))
-    (unless (file-directory-p helm-taskswitch-browser-extension-dir)
-      (user-error "No extension directory %s"
-                  helm-taskswitch-browser-extension-dir))
+  (let* ((from helm-taskswitch-browser--source-dir)
+         (to helm-taskswitch-browser-extension-dir)
+         (in-place (and (file-directory-p to) (file-equal-p from to)))
+         (config (expand-file-name "config.js" to)))
+    (unless (file-exists-p (expand-file-name "manifest.json" from))
+      (user-error "The extension's files are missing from %s" from))
+    (unless in-place
+      (helm-taskswitch-browser--copy-extension from to))
     (with-file-modes #o600
       (write-region
        (format "// Written by M-x helm-taskswitch-browser-install.  Do not commit.
@@ -423,11 +478,13 @@ self.HELM_TASKSWITCH_CONFIG = {port: %d, token: %S};
                (helm-taskswitch-browser--token))
        nil config nil 'silent))
     (with-help-window "*helm-taskswitch-browser install*"
-      (princ (format "Wrote %s\n\n" config))
+      (princ (if in-place
+                 (format "Wrote %s\n\n" config)
+               (format "Installed extension %s in %s\n\n"
+                       helm-taskswitch-browser--bundled-version to)))
       (princ "To load the extension in Chrome:\n")
       (princ "  1. Open chrome://extensions and turn on Developer mode.\n")
-      (princ (format "  2. Click \"Load unpacked\" and choose %s\n"
-                     helm-taskswitch-browser-extension-dir))
+      (princ (format "  2. Click \"Load unpacked\" and choose %s\n" to))
       (princ "     If it is already loaded, click its reload button instead.\n")
       (princ (format "  3. Check its ID is %s\n"
                      (string-remove-prefix

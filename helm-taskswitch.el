@@ -1,11 +1,11 @@
-;;; helm-taskswitch.el --- Use helm to switch windows and buffers  -*- lexical-binding: t -*-
+;;; helm-taskswitch.el --- Use helm to switch windows, browser tabs and buffers  -*- lexical-binding: t -*-
 
 ;; Author: Brian Caruso <briancaruso@gmail.com>
 ;; Maintainer: Brian Caruso <briancaruso@gmail.com>
 ;; Created: 2016-05-27
 ;; URL: https://github.com/bdc34/helm-taskswitch
-;; Package-Version: 2.0.0
-;; Package-Requires: ((emacs "24")(helm "3.0"))
+;; Package-Version: 2.1.0
+;; Package-Requires: ((emacs "28.1") (helm "3.0") (websocket "1.15"))
 ;; Keywords: frames
 
 ;; This file is NOT part of GNU Emacs.
@@ -26,7 +26,8 @@
 
 ;;; Commentary:
 
-;; `helm-taskswitch' provides an X window and buffer switching with helm.
+;; `helm-taskswitch' switches between desktop windows (X11, or KDE
+;; Plasma on Wayland), browser tabs and Emacs buffers with helm.
 
 ;; ## Table of Contents
 
@@ -52,7 +53,7 @@
 
 ;; ## Usage
 
-;; To activate use `M-x helm-task-switcher'.
+;; To activate use `M-x helm-taskswitch'.
 
 ;; ## Issues / bugs
 
@@ -64,7 +65,7 @@
 
 ;; * which version of Emacs you're running on which operating system, and
 
-;; * how you installed `helm-task-switcher', wmctrl and helm.
+;; * how you installed `helm-taskswitch', wmctrl and helm.
 
 ;; ## TODOs
 
@@ -103,7 +104,7 @@
 ;; Customisable variables.
 
 (defgroup helm-taskswitch nil
-  "Use helm to switch between tasks (X11 windows or buffers)."
+  "Use helm to switch between tasks (windows, browser tabs or buffers)."
   :prefix "helm-taskswitch-"
   :group 'external)
 

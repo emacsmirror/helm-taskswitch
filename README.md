@@ -1,5 +1,6 @@
 # helm-taskswitch
-Helm source for switching between X windows
+Helm source for switching between desktop windows, browser tabs and
+Emacs buffers.
 
 You know how some times looking for the program or browser tab is like
 rummaging through a drawer of unmatched socks? This is a solution to
@@ -7,25 +8,31 @@ that problem.
 
 ![helm-taskswitch screenshot](/screenshot.png)
 
+`M-x helm-taskswitch` opens one Helm list with these sections:
+
+| Section | Where it comes from |
+|---|---|
+| Windows | `wmctrl` on X11, or KWin over D-Bus on KDE Plasma under Wayland |
+| Browser tabs | Every Chrome tab, sent to Emacs by the extension in `browser-extension/` |
+| Buffers, recent files | Helm's own sources |
+
 ## How I use this
 
 ### Hot key to activate helm-taskswitch
 I map the win-a key to be globally handled by the window manager to
 run ``` emacsclient -n -e '(helm-taskswitch)' ```
 
-### Force all browser tabs to a window instead
+On KDE Plasma this is a custom shortcut in System Settings → Shortcuts.
+
+### Browser tabs
 A lot of tasks are done in browser tabs. But they are not accessable
 to task switchers. I definitly need to switch between browser tabs to
 get my work done.
 
-To get chrome browser tabs exposed to the helm-taskswitcher, I use a
-extension called 'New Tab, New Window' so each tab is in its own
-window. To further assist with searching for tabs I use an extension
-'URL in title'.
-
-These would allow access to tabs from any task switcher but most
-mainstream ones would be useless with dozens of browser windows. Using
-matching from helm alows helm-taskswitcher to quickly find them.
+The browser extension in `browser-extension/` sends every Chrome tab to
+Emacs, so tabs show up in helm-taskswitch next to windows and buffers.
+The most recently used tabs come first, and the URL is shown and
+searchable. See [Browser tabs](#browser-tabs-1) below for setup.
 
 ### Example 
 With this setup, when I hit win-a, Emacs comes up and I get the task
@@ -35,12 +42,12 @@ my JavaScript buffers. Helm handles all the auto-complete and
 filtering. Hitting return brings the window/tab/buffer to the
 foreground.
 
-Lets say I want a chrome window with the an AWS ElasticSearch console.
+Lets say I want a chrome tab with the an AWS ElasticSearch console.
 
-I hit win-a, type 'go' (that filers to all google chrome windows)
-SPACE 'ela' (all google chrome with 'ela' in title) SPACE 'con' (all
-chrome with 'ela' and 'con' in title). Then I usually just hit return
-without looking since I'm confident it will be right.
+I hit win-a, type 'chr' (that filters to Chrome windows and tabs)
+SPACE 'ela' (all of those with 'ela' in the title or URL) SPACE 'con'
+(those with 'ela' and 'con'). Then I usually just hit return without
+looking since I'm confident it will be right.
 
 This works great for me. I still use alt-tab for most recently used
 program. And if I have my hand on the mouse I use it for task
@@ -96,12 +103,135 @@ I'm looking for.
 3) I never have to find which browser window has which tab. All the
 tabs are exposed.
 
-
-## TODO 
-This doesn't keep track of how frequently windows are visited or the
-most recently visited window. I'm working on that. I have the input
-data by listening to xevents. 
-
 ## Requirements
 
-Xwindows, wmctrl, emacs, helm. I run this on linux.
+- Linux, Emacs 28.1 or later, [helm](https://github.com/emacs-helm/helm) 3.0 or later.
+- Windows, one of:
+  - **X11:** [wmctrl](https://sites.google.com/site/tstyblo/wmctrl).
+  - **KDE Plasma on Wayland:** nothing extra. Windows are listed
+    through KWin's D-Bus interface. Tested on Plasma 5.27.
+- Browser tabs (optional): [websocket.el](https://github.com/ahyatt/emacs-websocket)
+  1.15 or later, and Chrome. Tested on Chrome 156.
+
+## Installation
+
+```elisp
+(add-to-list 'load-path "~/src/helm-taskswitch")
+(require 'helm-taskswitch)          ; also loads helm-taskswitch-browser
+(helm-taskswitch-browser-mode 1)    ; only needed for browser tabs
+```
+
+Loading `helm-taskswitch.el` with `load-file` also works; it loads
+`helm-taskswitch-browser.el` from beside itself. If websocket.el is
+missing, the browser tabs section is just empty.
+
+### Window backend
+
+`helm-taskswitch-backend` picks how windows are listed and focused. It
+is `kwin` when `XDG_SESSION_TYPE` is `wayland`, otherwise `wmctrl`.
+
+| Backend | Lists | Focus | Close |
+|---|---|---|---|
+| `wmctrl` | X11 windows (on Wayland, only XWayland ones) | yes, switching desktops too | yes |
+| `kwin` | All windows, through KWin's window runner on D-Bus | yes, KWin switches desktops itself | not yet |
+
+## Browser tabs
+
+```
+Chrome ── extension (browser-extension/) ── ws://127.0.0.1:62841 ── Emacs (helm-taskswitch-browser-mode)
+```
+
+The extension connects out to a small WebSocket server that Emacs runs,
+sends the list of tabs, and sends it again whenever tabs change. Emacs
+keeps the latest list, so Helm opens instantly. No native messaging
+helper program is needed.
+
+### Setup
+
+1. `M-x helm-taskswitch-browser-install`. This copies the extension to
+   `~/.local/share/helm-taskswitch/browser-extension/`
+   (`helm-taskswitch-browser-extension-dir`), writes its `config.js`
+   there with the port and a secret token, and shows these steps.
+2. In Chrome, open `chrome://extensions` and turn on **Developer mode**.
+3. Click **Load unpacked** and choose that directory. The extension ID
+   must be `iofbocbifodmmplkphnmicpokfpgiodh` (the key in
+   `manifest.json` fixes it).
+4. Turn on `helm-taskswitch-browser-mode` (see Installation).
+5. `M-x helm-taskswitch-browser-status` should show Chrome as
+   authenticated, with a tab count, within about a minute.
+
+The extension is copied out of the package because package.el deletes
+the package directory on every upgrade. **After upgrading
+helm-taskswitch**, run `M-x helm-taskswitch-browser-install` again and
+click the extension's reload button in `chrome://extensions`. Emacs
+tells you when the connected extension is older than the package's
+copy.
+
+To work on the extension itself, set
+`helm-taskswitch-browser-extension-dir` to the `browser-extension/`
+directory of your git checkout and load it from there. The install
+command then only writes `config.js` (which is git-ignored), and
+changes take effect when you reload the extension.
+
+### Actions on tabs
+
+| Action | What it does |
+|---|---|
+| Switch to tab (default) | Activates the tab and brings its window to the front (on Wayland through KWin if Chrome cannot) |
+| Close tab(s) | Closes the marked tabs, or the selected one |
+| Copy URL | Puts the URL in the kill ring |
+| Reload, Duplicate, Mute/unmute | As in Chrome |
+| Open URL in eww | Opens the tab's URL in Emacs |
+
+`M-x helm-taskswitch-browser-open-url` opens a URL (the one at point by
+default) in a new Chrome tab.
+
+### Security
+
+The tab list includes every URL you have open, and Emacs can control
+the browser, so the connection is locked down:
+
+- The server only listens on 127.0.0.1.
+- Connections from any origin other than the extension's
+  (`chrome-extension://iofbocbifodmmplkphnmicpokfpgiodh`) are closed.
+  Web pages cannot fake this header.
+- The extension must then send a token, which only your user can read
+  (`~/.config/helm-taskswitch/token`, mode 600). `config.js` holds a
+  copy, is mode 600, and is git-ignored for checkouts.
+- Emacs only sends a fixed set of tab commands, and never runs anything
+  the browser sends.
+
+### Troubleshooting
+
+- **No tabs right after starting Emacs.** While Emacs is not running,
+  the extension only tries to connect about once a minute (each failed
+  try adds an error to its entry in `chrome://extensions`; that is
+  expected). It connects within about 90 seconds. After that it
+  reconnects within a second or two.
+- **Check the connection:** `M-x helm-taskswitch-browser-status` lists
+  connected browsers, the extension version, and when the tab list was
+  last updated.
+- **"Emacs refused the connection: wrong token"** in the extension's
+  service worker console: the token file was recreated. Run
+  `M-x helm-taskswitch-browser-install` again and reload the extension.
+- **"connected with extension X, but this package has Y":** run
+  `M-x helm-taskswitch-browser-install` and reload the extension.
+- **Port in use:** only one Emacs can run the server. Change
+  `helm-taskswitch-browser-port`, then run the install command again
+  and reload the extension.
+- **Log messages:** set `helm-taskswitch-browser-log` to `t`.
+
+## Tests
+
+```sh
+emacs --batch -L . -L /path/to/websocket \
+      -l test/helm-taskswitch-browser-test.el -f ert-run-tests-batch-and-exit
+```
+
+The tests run the server and a fake extension in one Emacs, on port
+62899, so a running browser cannot interfere.
+
+## TODO 
+- Windows are not ordered by how recently they were used (tabs are).
+- Closing windows with the `kwin` backend.
+- Firefox support for the browser extension.

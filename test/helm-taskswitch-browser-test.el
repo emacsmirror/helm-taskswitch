@@ -210,4 +210,78 @@
       (should (htb-test-wait (lambda () (zerop (htb-test-server-client-count)))))
       (should (null (helm-taskswitch-browser-tabs))))))
 
+;;;; Installing the extension
+
+(defmacro htb-test-with-install-dirs (&rest body)
+  "Run BODY with a fake shipped extension in `from' and an empty `to'."
+  (declare (indent 0))
+  `(let* ((root (make-temp-file "htb-install" t))
+          (from (expand-file-name "pkg/browser-extension/" root))
+          (to (expand-file-name "share/browser-extension/" root))
+          (helm-taskswitch-browser--source-dir from)
+          (helm-taskswitch-browser-extension-dir to)
+          (helm-taskswitch-browser-token-file (expand-file-name "token" root)))
+     (make-directory from t)
+     (write-region "{\"version\": \"0.2\"}" nil (expand-file-name "manifest.json" from))
+     (write-region "// background" nil (expand-file-name "background.js" from))
+     ;; A developer's own config.js in the checkout must never be copied.
+     (write-region "SOURCE-SECRET" nil (expand-file-name "config.js" from))
+     (unwind-protect
+         (cl-letf (((symbol-function 'with-help-window-internal) #'ignore))
+           (save-window-excursion ,@body))
+       (delete-directory root t))))
+
+(defun htb-test-read (file)
+  (with-temp-buffer (insert-file-contents file) (buffer-string)))
+
+(ert-deftest htb-install-copies-extension-and-writes-config ()
+  (htb-test-with-install-dirs
+    (helm-taskswitch-browser-install)
+    (should (file-exists-p (expand-file-name "manifest.json" to)))
+    (should (file-exists-p (expand-file-name "background.js" to)))
+    (let ((config (expand-file-name "config.js" to)))
+      (should (string-match-p (regexp-quote (helm-taskswitch-browser--token))
+                              (htb-test-read config)))
+      (should-not (string-match-p "SOURCE-SECRET" (htb-test-read config)))
+      (should (= (file-modes config) #o600)))))
+
+(ert-deftest htb-install-again-updates-files-keeps-token ()
+  (htb-test-with-install-dirs
+    (helm-taskswitch-browser-install)
+    (let ((token (helm-taskswitch-browser--token)))
+      ;; A package upgrade ships a new background.js.
+      (write-region "// background v2" nil (expand-file-name "background.js" from))
+      (helm-taskswitch-browser-install)
+      (should (equal (htb-test-read (expand-file-name "background.js" to))
+                     "// background v2"))
+      (should (string-match-p (regexp-quote token)
+                              (htb-test-read (expand-file-name "config.js" to)))))))
+
+(ert-deftest htb-install-in-place-only-writes-config ()
+  (htb-test-with-install-dirs
+    (let ((helm-taskswitch-browser-extension-dir from))
+      (helm-taskswitch-browser-install)
+      (should (string-match-p (regexp-quote (helm-taskswitch-browser--token))
+                              (htb-test-read (expand-file-name "config.js" from))))
+      (should-not (file-exists-p to)))))
+
+(ert-deftest htb-old-extension-version-is-reported ()
+  (htb-test-with-server
+    (let ((helm-taskswitch-browser--bundled-version "0.3")
+          (messages nil)
+          (client (htb-test-connect)))
+      (cl-letf* ((real-message (symbol-function 'message))
+                 ((symbol-function 'message)
+                  (lambda (fmt &rest args)
+                    (push (apply #'format fmt args) messages)
+                    (apply real-message fmt args))))
+        (htb-test-send client
+                       `((type . "hello") (browser . "test") (protocol . 1)
+                         (token . ,(helm-taskswitch-browser--token))
+                         (extensionVersion . "0.2")))
+        (should (htb-test-wait (lambda () (helm-taskswitch-browser-clients)))))
+      ;; Still accepted, but told to update.
+      (should (seq-some (lambda (m) (string-match-p "extension 0.2.*has 0.3.*install" m))
+                        messages)))))
+
 ;;; helm-taskswitch-browser-test.el ends here
