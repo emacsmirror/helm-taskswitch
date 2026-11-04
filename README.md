@@ -135,6 +135,16 @@ is `kwin` when `XDG_SESSION_TYPE` is `wayland`, otherwise `wmctrl`.
 | `wmctrl` | X11 windows (on Wayland, only XWayland ones) | yes, switching desktops too | yes |
 | `kwin` | All windows, through KWin's window runner on D-Bus | yes, KWin switches desktops itself | not yet |
 
+**Other Wayland desktops (GNOME, Sway and so on):** the default picks
+`kwin` for every Wayland session, but the `kwin` backend only works on
+KDE Plasma. Elsewhere the Windows section is empty and focusing a
+window fails with a D-Bus `ServiceUnknown` error. Set the backend to
+`wmctrl` there, which lists the XWayland windows:
+
+```elisp
+(setq helm-taskswitch-backend 'wmctrl)
+```
+
 ## Browser tabs
 
 ```
