@@ -216,9 +216,10 @@ the browser, so the connection is locked down:
   `M-x helm-taskswitch-browser-install` again and reload the extension.
 - **"connected with extension X, but this package has Y":** run
   `M-x helm-taskswitch-browser-install` and reload the extension.
-- **Port in use:** only one Emacs can run the server. Change
-  `helm-taskswitch-browser-port`, then run the install command again
-  and reload the extension.
+- **Port in use:** only one Emacs can run the server. In a second
+  Emacs, `helm-taskswitch-browser-mode` shows a warning and stays off.
+  To use a different port, change `helm-taskswitch-browser-port`, then
+  run the install command again and reload the extension.
 - **Log messages:** set `helm-taskswitch-browser-log` to `t`.
 
 ## Tests

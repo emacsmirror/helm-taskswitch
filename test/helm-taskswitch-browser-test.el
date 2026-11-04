@@ -284,4 +284,26 @@
       (should (seq-some (lambda (m) (string-match-p "extension 0.2.*has 0.3.*install" m))
                         messages)))))
 
+(ert-deftest htb-mode-warns-instead-of-signaling-when-port-is-taken ()
+  ;; The test server holds the port, so a second server cannot listen.
+  (htb-test-with-server
+    (let ((first-server helm-taskswitch-browser--server)
+          (helm-taskswitch-browser-mode nil)
+          (warnings nil))
+      (let ((helm-taskswitch-browser--server nil))
+        (cl-letf (((symbol-function 'display-warning)
+                   (lambda (type msg &rest _) (push (list type msg) warnings))))
+          (unwind-protect
+              (progn
+                ;; Must not signal, so the rest of an init file still loads.
+                (helm-taskswitch-browser-mode 1)
+                (should-not helm-taskswitch-browser-mode)
+                (should-not helm-taskswitch-browser--server))
+            (when helm-taskswitch-browser--server
+              (websocket-server-close helm-taskswitch-browser--server)))))
+      (should (equal (caar warnings) 'helm-taskswitch-browser))
+      (should (string-match-p "Cannot listen" (cadar warnings)))
+      ;; The server that holds the port is untouched.
+      (should (eq helm-taskswitch-browser--server first-server)))))
+
 ;;; helm-taskswitch-browser-test.el ends here

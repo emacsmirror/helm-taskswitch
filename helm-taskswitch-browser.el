@@ -332,15 +332,20 @@ Keys: :origin-ok, :authed, :browser, :started-at, :opened, :last-seen,
 (define-minor-mode helm-taskswitch-browser-mode
   "Accept tab lists from the helm-taskswitch browser extension.
 Runs a WebSocket server on 127.0.0.1, port
-`helm-taskswitch-browser-port'."
+`helm-taskswitch-browser-port'.  If the server cannot start, the
+mode stays off and a warning says why."
   :global t
   :group 'helm-taskswitch-browser
   (if helm-taskswitch-browser-mode
+      ;; Warn instead of signaling: this is usually turned on from an
+      ;; init file, and an error there would stop the rest of it loading.
       (condition-case err
           (helm-taskswitch-browser-start)
         (error
          (setq helm-taskswitch-browser-mode nil)
-         (signal (car err) (cdr err))))
+         (display-warning 'helm-taskswitch-browser
+                          (format "Not started: %s"
+                                  (error-message-string err)))))
     (helm-taskswitch-browser-stop)))
 
 ;;;; Using the tabs and sending commands
