@@ -220,17 +220,27 @@ the browser, so the connection is locked down:
   Emacs, `helm-taskswitch-browser-mode` shows a warning and stays off.
   To use a different port, change `helm-taskswitch-browser-port`, then
   run the install command again and reload the extension.
+- **"no window matches tab ...":** with the `kwin` backend, Emacs
+  raises the window whose title is the tab's title plus a browser
+  ending such as ` - Google Chrome`. If your browser's window titles
+  end differently, add the ending to
+  `helm-taskswitch-tab-window-title-suffixes`.
 - **Log messages:** set `helm-taskswitch-browser-log` to `t`.
 
 ## Tests
 
+With helm and websocket.el installed through package.el:
+
 ```sh
-emacs --batch -L . -L /path/to/websocket \
+emacs --batch --eval '(package-initialize)' -L . \
+      -l test/helm-taskswitch-test.el -f ert-run-tests-batch-and-exit
+emacs --batch --eval '(package-initialize)' -L . \
       -l test/helm-taskswitch-browser-test.el -f ert-run-tests-batch-and-exit
 ```
 
-The tests run the server and a fake extension in one Emacs, on port
-62899, so a running browser cannot interfere.
+The browser tests run the server and a fake extension in one Emacs, on
+port 62899, so a running browser cannot interfere. The other tests
+fake KWin and the browser.
 
 ## TODO 
 - Windows are not ordered by how recently they were used (tabs are).

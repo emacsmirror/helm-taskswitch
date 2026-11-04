@@ -406,9 +406,11 @@ CALLBACK are as for `helm-taskswitch-browser-send'; tabId is added."
    (cons `(tabId . ,(alist-get 'id tab)) args)
    callback))
 
-(defun helm-taskswitch-browser-activate (tab)
-  "Switch to TAB and focus its window."
-  (helm-taskswitch-browser-tab-command tab "activate"))
+(defun helm-taskswitch-browser-activate (tab &optional callback)
+  "Switch to TAB and focus its window.
+CALLBACK, if given, is called with the reply once the browser has
+switched, as for `helm-taskswitch-browser-send'."
+  (helm-taskswitch-browser-tab-command tab "activate" nil callback))
 
 (defun helm-taskswitch-browser-close (tabs)
   "Close TABS, grouped by the browser each came from."

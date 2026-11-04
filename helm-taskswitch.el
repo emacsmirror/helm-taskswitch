@@ -332,7 +332,8 @@ The argument, the current candidate, is ignored; helm passes it."
                   (error-message-string err))))
 
 (declare-function helm-taskswitch-browser-tabs "helm-taskswitch-browser")
-(declare-function helm-taskswitch-browser-activate "helm-taskswitch-browser")
+(declare-function helm-taskswitch-browser-activate "helm-taskswitch-browser"
+                  (tab &optional callback))
 (declare-function helm-taskswitch-browser-close "helm-taskswitch-browser")
 (declare-function helm-taskswitch-browser-reload "helm-taskswitch-browser")
 (declare-function helm-taskswitch-browser-duplicate "helm-taskswitch-browser")
@@ -367,21 +368,75 @@ The argument, the current candidate, is ignored; helm passes it."
     (mapcar (lambda (tab) (cons (helm-taskswitch--tab-display tab) tab))
             (helm-taskswitch-browser-tabs))))
 
+(defcustom helm-taskswitch-tab-window-title-suffixes
+  '(" - Google Chrome" " - Chromium" " — Mozilla Firefox" " - Mozilla Firefox")
+  "Endings a browser adds to its active tab's title to make the window title.
+With the `kwin' backend, switching to a tab raises the window whose
+title is exactly the tab's title followed by one of these."
+  :type '(repeat string)
+  :group 'helm-taskswitch)
+
+(defvar helm-taskswitch--raise-tries 10
+  "How many more times to look for a tab's window if it is not found.")
+
+(defvar helm-taskswitch--raise-interval 0.1
+  "Seconds between looks for a tab's window.")
+
+(defun helm-taskswitch--tab-windows (title windows)
+  "Return the windows in WINDOWS displaying the tab titled TITLE.
+WINDOWS are window alists from `helm-taskswitch--kwin-list-windows'.
+A window matches when its title is TITLE followed by one of
+`helm-taskswitch-tab-window-title-suffixes'."
+  (seq-filter
+   (lambda (w)
+     (let ((window-title (or (cdr (assoc 'title w)) "")))
+       (seq-some (lambda (suffix)
+                   (string= window-title (concat title suffix)))
+                 helm-taskswitch-tab-window-title-suffixes)))
+   windows))
+
+(defun helm-taskswitch--raise-tab-window (title tries)
+  "Ask KWin to activate the window displaying the tab titled TITLE.
+The window title can change a little after the browser has switched
+tabs, so if no window matches yet, look again up to TRIES more times,
+`helm-taskswitch--raise-interval' seconds apart.  When the tab has no
+title, or several windows match, raise nothing: raising the wrong
+window is worse than raising none."
+  (with-demoted-errors "helm-taskswitch: cannot raise the tab's window: %S"
+    (if (or (null title) (string-empty-p title))
+        (message "helm-taskswitch: the tab has no title, so its window was not raised")
+      (let ((matches (helm-taskswitch--tab-windows
+                      title (helm-taskswitch--kwin-list-windows)))
+            (shown (truncate-string-to-width title 50 nil nil "…")))
+        (cond ((cdr matches)
+               (message "helm-taskswitch: %d windows match tab %S, so none was raised"
+                        (length matches) shown))
+              (matches
+               (helm-taskswitch--kwin "Run" (cdr (assoc 'window-id (car matches)))
+                                      ""))
+              ((> tries 0)
+               (run-at-time helm-taskswitch--raise-interval nil
+                            #'helm-taskswitch--raise-tab-window
+                            title (1- tries)))
+              (t
+               (message "helm-taskswitch: no window matches tab %S; see `helm-taskswitch-tab-window-title-suffixes'"
+                        shown)))))))
+
 (defun helm-taskswitch--browser-tab-activate (tab)
   "Switch to the browser TAB and raise its window."
-  (helm-taskswitch-browser-activate tab)
-  ;; On Wayland the browser may not be allowed to raise its own window.
-  ;; Once the tab is active the window title starts with the tab title,
-  ;; so find that window and ask KWin to activate it.
-  (when (eq helm-taskswitch-backend 'kwin)
-    (sit-for 0.3)
-    (let* ((title (alist-get 'title tab))
-           (win (and title
-                     (seq-find (lambda (w)
-                                 (string-prefix-p title (cdr (assoc 'title w))))
-                               (helm-taskswitch--kwin-list-windows)))))
-      (when win
-        (helm-taskswitch--kwin "Run" (cdr (assoc 'window-id win)) "")))))
+  (if (not (eq helm-taskswitch-backend 'kwin))
+      (helm-taskswitch-browser-activate tab)
+    ;; On Wayland the browser may not be allowed to raise its own
+    ;; window.  Once it replies that the tab is active, find the window
+    ;; showing that tab and ask KWin to activate it.
+    (let ((title (alist-get 'title tab)))
+      (helm-taskswitch-browser-activate
+       tab
+       (lambda (reply)
+         (if (alist-get 'ok reply)
+             (helm-taskswitch--raise-tab-window
+              title helm-taskswitch--raise-tries)
+           (message "helm-taskswitch: %s" (alist-get 'error reply))))))))
 
 (defun helm-taskswitch--browser-tabs-close (_tab)
   "Close the marked tabs, or the selected one."
