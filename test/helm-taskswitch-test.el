@@ -32,6 +32,17 @@
     (should (equal (hts-test-ids (helm-taskswitch--tab-windows "Inbox" windows))
                    '("a" "b")))))
 
+(ert-deftest hts-wmctrl-focus-only-activates ()
+  (let ((helm-taskswitch-backend 'wmctrl)
+        (helm-taskswitch-wmctrl-path "/usr/bin/wmctrl")
+        (commands nil))
+    (cl-letf (((symbol-function 'call-process-shell-command)
+               (lambda (cmd &rest _) (push cmd commands) 0)))
+      ;; A sticky window: its desktop is -1.
+      (helm-taskswitch-focus-window-by-candidate
+       '(((window-id . "0x01e00007") (desktop-number . "-1")))))
+    (should (equal commands '("/usr/bin/wmctrl -i -a '0x01e00007'")))))
+
 (defmacro hts-test-with-fake-kwin (window-lists &rest body)
   "Run BODY with KWin and the browser faked.
 Each look at the windows returns the next list in WINDOW-LISTS (the

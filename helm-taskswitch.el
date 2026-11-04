@@ -274,11 +274,10 @@ AL is a helm candidate, a list holding a window associative list."
     (if (eq helm-taskswitch-backend 'kwin)
         ;; KWin switches to the window's virtual desktop itself.
         (helm-taskswitch--kwin "Run" id "")
-      (let ((desktop-id (cdr (assoc 'desktop-number (car al)))))
-        (call-process-shell-command
-         (concat helm-taskswitch-wmctrl-path " -s '" desktop-id "'"))
-        (call-process-shell-command
-         (concat helm-taskswitch-wmctrl-path " -i -a '" id "'"))))))
+      ;; -a switches to the window's desktop itself.  A separate -s
+      ;; would fail for sticky windows, whose desktop is -1.
+      (call-process-shell-command
+       (concat helm-taskswitch-wmctrl-path " -i -a '" id "'")))))
 
 
 (defun helm-taskswitch-close-candidate (al)
