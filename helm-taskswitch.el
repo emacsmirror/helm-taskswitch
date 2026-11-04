@@ -32,15 +32,7 @@
 ;; `helm-taskswitch' switches between desktop windows (X11, or KDE
 ;; Plasma on Wayland), browser tabs and Emacs buffers with helm.
 
-;; ## Table of Contents
-
-;; - [Installation](#installation)
-;; - [Usage](#usage)
-;; - [Issues](#issues)
-;; - [License](#license)
-;; - [TODOs](#TODOs)
-
-;; ## Installation
+;; Installation:
 
 ;; Install wmctrl and helm.  On KDE Plasma under Wayland, wmctrl only
 ;; sees XWayland windows, so set `helm-taskswitch-backend' to `kwin'
@@ -54,11 +46,11 @@
 ;; used first, with actions to switch to, close, reload, duplicate or
 ;; mute them, or copy their URL.
 
-;; ## Usage
+;; Usage:
 
 ;; To activate use `M-x helm-taskswitch'.
 
-;; ## Issues / bugs
+;; Issues / bugs:
 
 ;; If you discover an issue or bug in `helm-taskswitch' not already noted:
 
@@ -70,7 +62,7 @@
 
 ;; * how you installed `helm-taskswitch', wmctrl and helm.
 
-;; ## TODOs
+;; TODOs:
 
 ;; * handle desktops: Switch to WM desktop withEmacs, bring Emacs to fore on
 ;; activating, In most cases this already works.
@@ -89,11 +81,11 @@
 ;; * Strip WMCLASS from end of title
 ;; Title often ends with WMCLASS or something like that.  Try to strip these off.
 
-;; ## License
+;; License:
 
-;; [GNU General Public License version 3]
+;; GNU General Public License version 3
 ;; (http://www.gnu.org/licenses/gpl.html), or (at your option) any
-;; later version;; Code from https://github.com/flexibeast/ewmctrl is
+;; later version.  Code from https://github.com/flexibeast/ewmctrl is
 ;; used under GNU 3.
 
 ;;; Code:
@@ -127,79 +119,93 @@ windows."
   :group 'helm-taskswitch)
 
 (defcustom helm-taskswitch-title-transform 'identity
-  "Transform title of a single client window for display in helm selection."
+  "Function that transforms the title of a window for display in helm.
+It is called with the title and returns the string to show."
   :group 'helm-taskswitch
-  :type '(repeat function))
+  :type 'function)
 
 (defcustom helm-taskswitch-wmclass-width 12
-  "Column with of wmclass field when displayed."
+  "Column width of the wmclass field when displayed."
   :group 'helm-taskswitch
   :type 'integer)
 
+(define-obsolete-variable-alias 'helm-taskswitch-open-hooks
+  'helm-taskswitch-open-hook "2.1.0")
+
+(defcustom helm-taskswitch-open-hook nil
+  "Hook run when `helm-taskswitch' starts, before helm opens."
+  :group 'helm-taskswitch
+  :type 'hook)
+
 (defgroup helm-taskswitch-faces nil
-  "Customize the appearance of `helm-taskswitch`."
-  :prefix "helm-"
+  "Customize the appearance of `helm-taskswitch'."
+  :prefix "helm-taskswitch-"
   :group 'helm-taskswitch
   :group 'helm-faces)
 
-(defface helm-taskswitch-browser-face
+(defface helm-taskswitch-label-browser
   '((t (:inherit font-lock-constant-face)))
-  "Face used for web browsers."
+  "Face used for the label of web browsers."
   :group 'helm-taskswitch-faces)
 
-(defface helm-taskswitch-term-face
+(defface helm-taskswitch-label-terminal
   '((t (:inherit font-lock-string-face)))
-  "Face used for terminals."
+  "Face used for the label of terminals."
   :group 'helm-taskswitch-faces)
 
-(defface helm-taskswitch-emacs-face
+(defface helm-taskswitch-label-emacs
   '((t (:inherit font-lock-regexp-grouping-construct)))
-  "Face used for Emacs."
+  "Face used for the label of Emacs."
   :group 'helm-taskswitch-faces)
+
+(define-obsolete-face-alias 'helm-taskswitch-browser-face
+  'helm-taskswitch-label-browser "2.1.0")
+(define-obsolete-face-alias 'helm-taskswitch-term-face
+  'helm-taskswitch-label-terminal "2.1.0")
+(define-obsolete-face-alias 'helm-taskswitch-emacs-face
+  'helm-taskswitch-label-emacs "2.1.0")
 
 
 ;; Internal Code
 
 (defun helm-taskswitch-format-candidate (al)
-  "Formats a candidate client window for task switcher.
-
-  AL is the associative list for a window."
+  "Format a candidate client window for the task switcher.
+AL is the associative list for a window."
   (let* ((ddfmt (format "%d.%d" helm-taskswitch-wmclass-width helm-taskswitch-wmclass-width))
          (wmtitlefmt (concat "%-" ddfmt "s %s"))
          (windowstr (format wmtitlefmt (helm-taskswitch-wmclass al) (helm-taskswitch-title al))))
     (cons windowstr (list al))))
 
 (defun helm-taskswitch-title (al)
-  "Formats the title of a window.
-
-  AL is an associative list for a window."
+  "Format the title of a window.
+AL is an associative list for a window."
   (let ((title   (cdr (assoc 'title   al))))
     (funcall helm-taskswitch-title-transform
              (replace-regexp-in-string "- Google Chrome" "" title))))
 
 (defun helm-taskswitch-wmclass (al)
-  "Gets the WMCLASS for window AL associative list."
+  "Return the label for the WMCLASS of window AL, an associative list."
   (let ((wmclass (cdr (assoc 'wmclass al)))
         (title (or (cdr (assoc 'title al)) "")))
     ;; The X11 names come from wmctrl; the others are the icon names
     ;; KWin reports for the `kwin' backend.
     (cond ((member wmclass '("google-chrome.Google-chrome" "google-chrome"))
-           (propertize "Chrome" 'face 'helm-taskswitch-browser-face ))
+           (propertize "Chrome" 'face 'helm-taskswitch-label-browser))
           ((string-equal wmclass "terminator.Terminator")
-           (propertize "Terminator" 'face 'helm-taskswitch-term-face))
+           (propertize "Terminator" 'face 'helm-taskswitch-label-terminal))
           ((string-equal wmclass "utilities-terminal")
-           (propertize "Terminal" 'face 'helm-taskswitch-term-face))
+           (propertize "Terminal" 'face 'helm-taskswitch-label-terminal))
           ((or (string-equal wmclass "emacs.Emacs")
                ;; KWin gives Emacs an empty icon name.
                (and (string-equal wmclass "")
                     (string-match-p "GNU Emacs" title)))
-           (propertize "Emacs" 'face 'helm-taskswitch-emacs-face))
+           (propertize "Emacs" 'face 'helm-taskswitch-label-emacs))
           (t wmclass) )))
 
 (defconst helm-taskswitch--wmctrl-field-count 10)
 (defconst helm-taskswitch--wmctrl-field-regex
   (concat "^"
-          (mapconcat 'identity (make-list (1- helm-taskswitch--wmctrl-field-count) "\\(\\S-+\\)\\s-+") "")
+          (mapconcat #'identity (make-list (1- helm-taskswitch--wmctrl-field-count) "\\(\\S-+\\)\\s-+") "")
           "\\(.+\\)"))
 
 (defun helm-taskswitch--list-windows ()
@@ -262,7 +268,8 @@ Uses the window runner that KRunner uses.  Each match is
 
 
 (defun helm-taskswitch-focus-window-by-candidate (al)
-  "Internal function to focus the desktop window specified by AL, a window associative list."
+  "Focus the desktop window specified by AL.
+AL is a helm candidate, a list holding a window associative list."
   (let ((id (cdr (assoc 'window-id (car al)))))
     (if (eq helm-taskswitch-backend 'kwin)
         ;; KWin switches to the window's virtual desktop itself.
@@ -275,21 +282,24 @@ Uses the window runner that KRunner uses.  Each match is
 
 
 (defun helm-taskswitch-close-candidate (al)
-  "Closes a candidate AL, a window associative list from ‘helm-taskswitch--list-windows’."
+  "Close the window of candidate AL.
+AL is a helm candidate, a list holding a window associative list
+from `helm-taskswitch--list-windows'."
     (let* ((id (cdr (assoc 'window-id (car al))))
            (cmd (concat helm-taskswitch-wmctrl-path " -i -c '" id "'")))
       (message (concat "helm-taskswitch: closing X client with " cmd))
       (call-process-shell-command cmd)))
 
 (defun helm-taskswitch-close-candidates (_al)
-  "Closes all selected candidates.  AL is ignored but seems to be needed by helm."
+  "Close all selected candidates.
+The argument, the current candidate, is ignored; helm passes it."
   (when (eq helm-taskswitch-backend 'kwin)
-    (user-error "helm-taskswitch: closing windows is not supported with the kwin backend yet"))
-  (mapc 'helm-taskswitch-close-candidate (helm-marked-candidates)))
+    (user-error "Closing windows is not supported with the kwin backend yet"))
+  (mapc #'helm-taskswitch-close-candidate (helm-marked-candidates)))
 
 (defun helm-taskswitch-client-candidates ()
-  "Return a list windows with title and wmclass."
-  (mapcar 'helm-taskswitch-format-candidate
+  "Return a list of windows with title and wmclass."
+  (mapcar #'helm-taskswitch-format-candidate
           (if (eq helm-taskswitch-backend 'kwin)
               (helm-taskswitch--kwin-list-windows)
             (helm-taskswitch--list-windows))))
@@ -297,10 +307,10 @@ Uses the window runner that KRunner uses.  Each match is
 (defvar helm-taskswitch-source-x-windows
       (helm-build-sync-source "X Windows"
         :fuzzy-match t
-        :candidates 'helm-taskswitch-client-candidates
-        :action '(("Focus window" . helm-taskswitch-focus-window-by-candidate )
-                  ("Close window(s)" . helm-taskswitch-close-candidates)
-                  ("dump client window s-exp" . prin1 )))
+        :candidates #'helm-taskswitch-client-candidates
+        :action `(("Focus window" . ,#'helm-taskswitch-focus-window-by-candidate)
+                  ("Close window(s)" . ,#'helm-taskswitch-close-candidates)
+                  ("dump client window s-exp" . ,#'prin1)))
       "Helm source that provides X windows and actions.")
 
 
@@ -335,7 +345,7 @@ Uses the window runner that KRunner uses.  Each match is
                   ("chrome" "Chrome")
                   ("firefox" "Firefox")
                   (_ (or browser "Browser")))
-                'face 'helm-taskswitch-browser-face)))
+                'face 'helm-taskswitch-label-browser)))
 
 (defun helm-taskswitch--tab-display (tab)
   "Return the helm display string for TAB."
@@ -391,13 +401,13 @@ Uses the window runner that KRunner uses.  Each match is
   (helm-build-sync-source "Browser tabs"
     :candidates #'helm-taskswitch--browser-tab-candidates
     :fuzzy-match t
-    :action '(("Switch to tab" . helm-taskswitch--browser-tab-activate)
-              ("Close tab(s)" . helm-taskswitch--browser-tabs-close)
-              ("Copy URL" . helm-taskswitch--browser-tab-copy-url)
-              ("Reload" . helm-taskswitch-browser-reload)
-              ("Duplicate" . helm-taskswitch-browser-duplicate)
-              ("Mute/unmute" . helm-taskswitch-browser-toggle-muted)
-              ("Open URL in eww" . helm-taskswitch--browser-tab-eww)))
+    :action `(("Switch to tab" . ,#'helm-taskswitch--browser-tab-activate)
+              ("Close tab(s)" . ,#'helm-taskswitch--browser-tabs-close)
+              ("Copy URL" . ,#'helm-taskswitch--browser-tab-copy-url)
+              ("Reload" . ,#'helm-taskswitch-browser-reload)
+              ("Duplicate" . ,#'helm-taskswitch-browser-duplicate)
+              ("Mute/unmute" . ,#'helm-taskswitch-browser-toggle-muted)
+              ("Open URL in eww" . ,#'helm-taskswitch--browser-tab-eww)))
   "Helm source of browser tabs sent by the helm-taskswitch extension.")
 
 
@@ -405,7 +415,7 @@ Uses the window runner that KRunner uses.  Each match is
 (defun helm-taskswitch ()
   "Use helm to switch between tasks (X11 windows, buffers or recentf)."
   (interactive)
-  (run-hooks 'helm-taskswitch-open-hooks )
+  (run-hooks 'helm-taskswitch-open-hook)
   (select-frame-set-input-focus (window-frame (selected-window)))
   (make-frame-visible)
   (unless helm-source-buffers-list

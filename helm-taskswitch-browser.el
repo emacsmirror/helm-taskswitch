@@ -186,7 +186,7 @@ Keys: :origin-ok, :authed, :browser, :started-at, :opened, :last-seen,
     (websocket-send-text ws (json-serialize object))))
 
 (defun helm-taskswitch-browser--refuse (ws reason)
-  "Tell WS why it is refused, then close it."
+  "Tell WS it is refused because of REASON, then close it."
   (helm-taskswitch-browser--log "refusing %S: %s"
                                 (websocket-origin ws) reason)
   (when (plist-get (helm-taskswitch-browser--state ws) :origin-ok)
@@ -313,7 +313,7 @@ Keys: :origin-ok, :authed, :browser, :started-at, :opened, :last-seen,
                :on-close #'helm-taskswitch-browser--on-close
                :on-error #'helm-taskswitch-browser--on-error)
             (file-error
-             (user-error "helm-taskswitch-browser: cannot listen on 127.0.0.1:%d (another Emacs?): %s"
+             (user-error "Cannot listen on 127.0.0.1:%d (another Emacs?): %s"
                          helm-taskswitch-browser-port
                          (error-message-string err)))))
     (helm-taskswitch-browser--log "listening on 127.0.0.1:%d"
@@ -379,7 +379,7 @@ index, title, url, active, pinned, audible, muted, lastAccessed) plus
 CALLBACK, if given, is called with the reply alist.  Without one, an
 error reply is shown with `message'.  Return the command id."
   (unless (websocket-openp ws)
-    (user-error "helm-taskswitch-browser: browser is not connected"))
+    (user-error "The browser is not connected"))
   (let ((id (setq helm-taskswitch-browser--next-id
                   (1+ helm-taskswitch-browser--next-id))))
     (when callback
@@ -437,7 +437,7 @@ CALLBACK are as for `helm-taskswitch-browser-send'; tabId is added."
    (list (read-string "Open URL in browser: " (thing-at-point 'url t))))
   (let ((ws (car (helm-taskswitch-browser-clients))))
     (unless ws
-      (user-error "helm-taskswitch-browser: no browser is connected"))
+      (user-error "No browser is connected"))
     (helm-taskswitch-browser-send ws "open" `((url . ,url)))))
 
 ;;;; Install and status
