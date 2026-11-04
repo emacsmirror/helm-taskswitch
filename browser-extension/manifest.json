@@ -3,7 +3,7 @@
   "name": "helm-taskswitch tabs",
   "short_name": "helm-taskswitch",
   "description": "Sends your tabs to Emacs helm-taskswitch over a WebSocket on 127.0.0.1, and lets Emacs switch to them.",
-  "version": "0.2",
+  "version": "0.3",
   "author": "Brian Caruso",
 
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAucJ50J5UK0Yqmwn7JYXu2P+yXU4DoNzbt4K9T1grKOZpFU/TBuvNGv4u5sUfKIHBU3uakVhVVCLJKlpHr37qX+ZM5X60hb04XgzQwWSDMITYlV1kY8fhbpuoTgW1sWk93TnnZSKCxW5i2KgQ5Ltk6c5LiPmhNP3r1/VkHFZbL4Zea1JyogMAaEIqdmu6oSNwZTXCxv4WXWYWmHLPDv6sEB0CZWZT2akMeTMGEoT8al9n9e0CrLkNVWhF5Ztwv66V2OuHbuDfmUDObJ1gWn7MMQlYYWQMdOnYN2f/25qcwFt+S27S5J54tYvCL8KYHKceCjiad+BmhJODy8Ra7k/FNQIDAQAB",

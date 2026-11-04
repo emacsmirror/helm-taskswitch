@@ -205,9 +205,16 @@ the browser, so the connection is locked down:
 - Connections from any origin other than the extension's
   (`chrome-extension://iofbocbifodmmplkphnmicpokfpgiodh`) are closed.
   Web pages cannot fake this header.
-- The extension must then send a token, which only your user can read
-  (`~/.config/helm-taskswitch/token`, mode 600). `config.js` holds a
-  copy, is mode 600, and is git-ignored for checkouts.
+- Both sides then prove they know a secret token, which only your user
+  can read (`~/.config/helm-taskswitch/token`, mode 600). `config.js`
+  holds a copy, is mode 600, and is git-ignored for checkouts. The
+  token itself is never sent: Emacs sends a random challenge, and each
+  side answers with an HMAC-SHA256 of both sides' nonces, keyed with
+  the token.
+- The extension sends no tabs and runs no commands until Emacs has
+  proved itself. So a program that takes the port while Emacs is not
+  running gets neither the token nor your tabs, and cannot control the
+  browser.
 - Emacs only sends a fixed set of tab commands, and never runs anything
   the browser sends.
 
@@ -224,8 +231,12 @@ the browser, so the connection is locked down:
 - **"Emacs refused the connection: wrong token"** in the extension's
   service worker console: the token file was recreated. Run
   `M-x helm-taskswitch-browser-install` again and reload the extension.
-- **"connected with extension X, but this package has Y":** run
+- **"connected with extension X, but this package has Y"**, or
+  **"protocol 1, Emacs speaks 2"**: run
   `M-x helm-taskswitch-browser-install` and reload the extension.
+- **"did not prove it knows the token; not trusting it"** in the
+  extension's service worker console: something other than this Emacs
+  answered on the port, or it has a different token file.
 - **Port in use:** only one Emacs can run the server. In a second
   Emacs, `helm-taskswitch-browser-mode` shows a warning and stays off.
   To use a different port, change `helm-taskswitch-browser-port`, then

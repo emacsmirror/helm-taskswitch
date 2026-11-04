@@ -45,8 +45,10 @@
 ;;
 ;; Security: the server only listens on 127.0.0.1.  A connection must
 ;; come from an allowed extension origin (web pages cannot fake the
-;; Origin header), and must then send the token, which only your user
-;; can read.  Emacs never runs anything the browser sends.
+;; Origin header), and must then prove it knows the token, which only
+;; your user can read.  Emacs proves it knows the token too, before the
+;; extension sends tabs or runs commands.  The token itself is never
+;; sent.  Emacs never runs anything the browser sends.
 
 ;;; Code:
 
@@ -118,8 +120,9 @@ directory of your git checkout; install then only writes config.js."
   :type 'boolean
   :group 'helm-taskswitch-browser)
 
-(defconst helm-taskswitch-browser-protocol 1
-  "Version of the message format; the extension sends it in hello.")
+(defconst helm-taskswitch-browser-protocol 2
+  "Version of the message format; the extension sends it in hello.
+Version 2 proves the token with HMAC instead of sending it.")
 
 (defvar helm-taskswitch-browser--hello-timeout 5
   "Seconds a new connection has to send a good hello.")
@@ -170,6 +173,51 @@ FUNCTION is called with the reply, which must come from WEBSOCKET.")
       (insert-file-contents file)
       (string-trim (buffer-string)))))
 
+;;;; Proving the token
+;;
+;; Neither side sends the token.  On connect Emacs sends a random
+;; challenge nonce.  The extension answers with its own nonce and an
+;; HMAC of both nonces keyed with the token; Emacs answers that with an
+;; HMAC under a different label.  So a program that takes the port while
+;; Emacs is not running learns nothing it can reuse, and the extension
+;; sends no tabs and runs no commands until Emacs has proved itself.
+
+(defun helm-taskswitch-browser--hmac (key message)
+  "Return the HMAC-SHA256 of MESSAGE keyed with KEY, as lowercase hex.
+KEY and MESSAGE are strings, encoded as UTF-8."
+  (let* ((key (encode-coding-string key 'utf-8 t))
+         (key (if (> (length key) 64)
+                  (secure-hash 'sha256 key nil nil t)
+                key))
+         (key (concat key (make-string (- 64 (length key)) 0)))
+         (pad (lambda (byte)
+                (apply #'unibyte-string
+                       (mapcar (lambda (b) (logxor b byte)) key)))))
+    (secure-hash
+     'sha256
+     (concat (funcall pad #x5c)
+             (secure-hash 'sha256
+                          (concat (funcall pad #x36)
+                                  (encode-coding-string message 'utf-8 t))
+                          nil nil t)))))
+
+(defun helm-taskswitch-browser--proof (role server-nonce client-nonce)
+  "Return the proof for ROLE, \"client\" or \"server\", over both nonces.
+SERVER-NONCE and CLIENT-NONCE are the hex nonces of this connection."
+  (helm-taskswitch-browser--hmac
+   (helm-taskswitch-browser--token)
+   (format "helm-taskswitch %s\n%s\n%s" role server-nonce client-nonce)))
+
+(defun helm-taskswitch-browser--secret-equal (a b)
+  "Return non-nil if strings A and B are equal.
+The time taken does not depend on where they differ."
+  (and (stringp a) (stringp b)
+       (= (length a) (length b))
+       (let ((diff 0))
+         (dotimes (i (length a))
+           (setq diff (logior diff (logxor (aref a i) (aref b i)))))
+         (zerop diff))))
+
 ;;;; Server
 
 (defun helm-taskswitch-browser--state (ws)
@@ -207,6 +255,12 @@ FUNCTION is called with the reply, which must come from WEBSOCKET.")
         (helm-taskswitch-browser--refuse ws (format "origin %S not allowed"
                                                     origin))
       (helm-taskswitch-browser--put ws :origin-ok t)
+      (let ((nonce (helm-taskswitch-browser--random-hex 16)))
+        (helm-taskswitch-browser--put ws :nonce nonce)
+        (helm-taskswitch-browser--send-json
+         ws `((type . "challenge")
+              (protocol . ,helm-taskswitch-browser-protocol)
+              (nonce . ,nonce))))
       (helm-taskswitch-browser--put
        ws :hello-timer
        (run-at-time helm-taskswitch-browser--hello-timeout nil
@@ -241,18 +295,24 @@ FUNCTION is called with the reply, which must come from WEBSOCKET.")
 
 (defun helm-taskswitch-browser--handle-hello (ws msg)
   "Check the hello MSG from WS and mark it authenticated."
-  (let ((token (alist-get 'token msg))
-        (protocol (alist-get 'protocol msg)))
+  (let* ((protocol (alist-get 'protocol msg))
+         (server-nonce (plist-get (helm-taskswitch-browser--state ws) :nonce))
+         (client-nonce (alist-get 'nonce msg)))
     ;; Kept even when refused, so status can show what is connecting.
     (helm-taskswitch-browser--put ws :version (alist-get 'extensionVersion msg))
     (cond
-     ((not (and (stringp token)
-                (string= token (helm-taskswitch-browser--token))))
-      (helm-taskswitch-browser--refuse ws "wrong token; run M-x helm-taskswitch-browser-install and reload the extension"))
+     ;; Checked first: an older extension sends no proof at all.
      ((not (eql protocol helm-taskswitch-browser-protocol))
       (helm-taskswitch-browser--refuse
-       ws (format "protocol %S, Emacs speaks %d" protocol
-                  helm-taskswitch-browser-protocol)))
+       ws (format "protocol %S, Emacs speaks %d; run M-x helm-taskswitch-browser-install and reload the extension"
+                  protocol helm-taskswitch-browser-protocol)))
+     ((not (and (stringp client-nonce)
+                (string-match-p "\\`[0-9a-f]\\{32,128\\}\\'" client-nonce)))
+      (helm-taskswitch-browser--refuse ws "bad nonce"))
+     ((not (helm-taskswitch-browser--secret-equal
+            (alist-get 'proof msg)
+            (helm-taskswitch-browser--proof "client" server-nonce client-nonce)))
+      (helm-taskswitch-browser--refuse ws "wrong token; run M-x helm-taskswitch-browser-install and reload the extension"))
      (t
       (when-let ((timer (plist-get (helm-taskswitch-browser--state ws)
                                    :hello-timer)))
@@ -264,8 +324,11 @@ FUNCTION is called with the reply, which must come from WEBSOCKET.")
       (helm-taskswitch-browser--put ws :started-at (alist-get 'startedAt msg))
       ;; The extension resets its retry delay only on this, so a refused
       ;; extension does not reconnect in a tight loop.
+      ;; The proof tells the extension it is talking to this Emacs.
       (helm-taskswitch-browser--send-json
-       ws `((type . "welcome") (protocol . ,helm-taskswitch-browser-protocol)))
+       ws `((type . "welcome") (protocol . ,helm-taskswitch-browser-protocol)
+            (proof . ,(helm-taskswitch-browser--proof
+                       "server" server-nonce client-nonce))))
       (let ((version (alist-get 'extensionVersion msg)))
         (if (and helm-taskswitch-browser--bundled-version
                  (not (equal version helm-taskswitch-browser--bundled-version)))

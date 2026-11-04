@@ -6,7 +6,14 @@
 //
 // Messages are JSON objects with a "type":
 //   to Emacs:   hello, tabs, ping, reply
-//   from Emacs: welcome (hello accepted), error (refused), cmd
+//   from Emacs: challenge, welcome (hello accepted), error (refused), cmd
+//
+// Neither side sends the token.  Emacs sends a challenge with a random
+// nonce; the hello answers with our own nonce and an HMAC of both,
+// keyed with the token; the welcome carries Emacs's HMAC of them under
+// another label.  Until that checks out, nothing else is sent and no
+// command is run, so a program that took the port while Emacs was not
+// running gets neither the token nor the tabs.
 //
 // PORT and TOKEN come from config.js, which M-x helm-taskswitch-browser-install
 // writes.  It is not in git because the token is a secret.
@@ -23,7 +30,10 @@ const CONFIG = self.HELM_TASKSWITCH_CONFIG || {};
 const PORT = CONFIG.port || 62841;
 const TOKEN = CONFIG.token || "";
 const SERVER_URL = `ws://127.0.0.1:${PORT}`;
-const PROTOCOL = 1;
+const PROTOCOL = 2;
+
+// How long Emacs has to send its challenge and welcome after we connect.
+const HANDSHAKE_MS = 10 * 1000;
 
 // Chrome stops an idle service worker after about 30 s.  Since Chrome
 // 116, WebSocket traffic resets that timer, so ping more often than that.
@@ -56,10 +66,51 @@ function log(...args) {
     console.log("[helm-taskswitch]", ...args);
 }
 
+// Only to an Emacs that has proved it knows the token.
 function send(message) {
-    if (ws && ws.readyState === WebSocket.OPEN) {
+    if (ws && ws.welcomed && ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify(message));
     }
+}
+
+// Proving the token
+// ------------------------------------------------------------------------
+
+const encoder = new TextEncoder();
+let hmacKey = null;
+
+function toHex(bytes) {
+    return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+function randomHex(nbytes) {
+    return toHex(crypto.getRandomValues(new Uint8Array(nbytes)));
+}
+
+// HMAC-SHA256 of "helm-taskswitch ROLE\nSERVER-NONCE\nCLIENT-NONCE",
+// keyed with the token.  helm-taskswitch-browser--proof in Emacs
+// computes the same.
+async function proof(role, serverNonce, clientNonce) {
+    if (!hmacKey) {
+        hmacKey = await crypto.subtle.importKey(
+            "raw", encoder.encode(TOKEN), {name: "HMAC", hash: "SHA-256"},
+            false, ["sign"]);
+    }
+    const message = `helm-taskswitch ${role}\n${serverNonce}\n${clientNonce}`;
+    const mac = await crypto.subtle.sign("HMAC", hmacKey, encoder.encode(message));
+    return toHex(new Uint8Array(mac));
+}
+
+// Compare without stopping at the first difference.
+function secretEqual(a, b) {
+    if (typeof a !== "string" || typeof b !== "string" || a.length !== b.length) {
+        return false;
+    }
+    let diff = 0;
+    for (let i = 0; i < a.length; i++) {
+        diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+    }
+    return diff === 0;
 }
 
 // Connecting and retrying
@@ -126,18 +177,25 @@ function openSocket() {
         return;
     }
     ws = sock;
-    // Set from Emacs's messages on this socket: "welcome" accepts the
-    // hello, "error" refuses it (wrong token or protocol).
+    // Set from Emacs's messages on this socket: a welcome with a good
+    // proof accepts us, "error" refuses us (wrong token or protocol).
     sock.welcomed = false;
     sock.refused = false;
+    sock.serverNonce = null;
+    sock.clientNonce = null;
+    sock.handshakeTimer = null;
 
     sock.onopen = () => {
-        log("connected, sending hello");
-        send({type: "hello", protocol: PROTOCOL, browser: "chrome",
-              token: TOKEN, startedAt: STARTED_AT,
-              extensionVersion: chrome.runtime.getManifest().version});
-        clearInterval(pingTimer);
-        pingTimer = setInterval(() => send({type: "ping"}), PING_MS);
+        log("connected, waiting for the challenge");
+        // Whatever is listening must prove it is Emacs, and soon.
+        sock.handshakeTimer = setTimeout(() => {
+            if (!sock.welcomed) {
+                console.error("[helm-taskswitch] no valid welcome from",
+                              SERVER_URL, "- is it Emacs?");
+                sock.refused = true;
+                sock.close();
+            }
+        }, HANDSHAKE_MS);
     };
 
     sock.onmessage = (event) => {
@@ -152,8 +210,11 @@ function openSocket() {
     // extension reconnect in a tight loop.
     sock.onclose = (event) => {
         log("closed", event.code, event.reason);
-        clearInterval(pingTimer);
-        pingTimer = null;
+        clearTimeout(sock.handshakeTimer);
+        if (ws === sock) {
+            clearInterval(pingTimer);
+            pingTimer = null;
+        }
         if (ws === sock) {
             ws = null;
         }
@@ -175,7 +236,7 @@ chrome.runtime.onInstalled.addListener(connect);
 // ------------------------------------------------------------------------
 
 async function sendTabs() {
-    if (!ws || ws.readyState !== WebSocket.OPEN) {
+    if (!ws || !ws.welcomed || ws.readyState !== WebSocket.OPEN) {
         return;
     }
     const tabs = await chrome.tabs.query({});
@@ -275,9 +336,55 @@ async function handleMessage(data, sock) {
         log("bad JSON from Emacs:", data);
         return;
     }
+    if (msg.type === "challenge") {
+        if (sock.serverNonce || typeof msg.nonce !== "string" ||
+            !/^[0-9a-f]{32,128}$/.test(msg.nonce)) {
+            log("bad challenge, closing");
+            sock.close();
+            return;
+        }
+        if (msg.protocol !== PROTOCOL) {
+            console.error("[helm-taskswitch] Emacs speaks protocol",
+                          msg.protocol, "and this extension", PROTOCOL,
+                          "- run M-x helm-taskswitch-browser-install and" +
+                          " reload this extension.");
+            sock.refused = true;
+            sock.close();
+            return;
+        }
+        sock.serverNonce = msg.nonce;
+        sock.clientNonce = randomHex(16);
+        const hello = {
+            type: "hello", protocol: PROTOCOL, browser: "chrome",
+            nonce: sock.clientNonce,
+            proof: await proof("client", sock.serverNonce, sock.clientNonce),
+            startedAt: STARTED_AT,
+            extensionVersion: chrome.runtime.getManifest().version,
+        };
+        if (sock.readyState === WebSocket.OPEN) {
+            log("sending hello");
+            sock.send(JSON.stringify(hello));
+        }
+        return;
+    }
     if (msg.type === "welcome") {
-        log("Emacs accepted the connection");
+        if (sock.welcomed || !sock.clientNonce) {
+            return;
+        }
+        const expected = await proof("server", sock.serverNonce,
+                                     sock.clientNonce);
+        if (!secretEqual(msg.proof, expected)) {
+            console.error("[helm-taskswitch] the server on", SERVER_URL,
+                          "did not prove it knows the token; not trusting it.");
+            sock.refused = true;
+            sock.close();
+            return;
+        }
+        log("Emacs accepted the connection and proved itself");
+        clearTimeout(sock.handshakeTimer);
         sock.welcomed = true;
+        clearInterval(pingTimer);
+        pingTimer = setInterval(() => send({type: "ping"}), PING_MS);
         await noteSuccess();
         await sendTabs();
         return;
@@ -288,7 +395,8 @@ async function handleMessage(data, sock) {
         sock.refused = true;
         return;
     }
-    if (msg.type !== "cmd") {
+    // Commands only from an Emacs that proved itself on this socket.
+    if (msg.type !== "cmd" || !sock.welcomed || sock !== ws) {
         return;
     }
     const fn = Object.hasOwn(COMMANDS, msg.cmd) ? COMMANDS[msg.cmd] : null;

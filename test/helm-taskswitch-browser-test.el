@@ -65,20 +65,41 @@
 (defun htb-test-send (client object)
   (websocket-send-text (htb-client-ws client) (json-serialize object)))
 
+(defun htb-test-message-of-type (client type)
+  "Return the first message of TYPE that CLIENT received."
+  (seq-find (lambda (m) (equal (alist-get 'type m) type))
+            (htb-client-messages client)))
+
+(defun htb-test-challenge (client)
+  "Wait for the challenge to CLIENT and return its nonce."
+  (should (htb-test-wait (lambda () (htb-test-message-of-type client "challenge"))))
+  (alist-get 'nonce (htb-test-message-of-type client "challenge")))
+
+(defconst htb-test-client-nonce "0123456789abcdef0123456789abcdef")
+
+(defun htb-test-hello-message (client &optional token protocol server-nonce)
+  "Return a hello for CLIENT proving TOKEN (default the real one).
+PROTOCOL defaults to the current one.  The proof is over SERVER-NONCE,
+by default the one in the challenge CLIENT got."
+  (let ((server-nonce (or server-nonce (htb-test-challenge client))))
+    `((type . "hello") (browser . "test")
+      (protocol . ,(or protocol helm-taskswitch-browser-protocol))
+      (nonce . ,htb-test-client-nonce)
+      (proof . ,(helm-taskswitch-browser--hmac
+                 (or token (helm-taskswitch-browser--token))
+                 (format "helm-taskswitch client\n%s\n%s"
+                         server-nonce htb-test-client-nonce)))
+      (startedAt . 1))))
+
 (defun htb-test-hello (client &optional token protocol)
-  (htb-test-send client
-                 `((type . "hello") (browser . "test")
-                   (protocol . ,(or protocol 1))
-                   (token . ,(or token (helm-taskswitch-browser--token)))
-                   (startedAt . 1))))
+  (htb-test-send client (htb-test-hello-message client token protocol)))
 
 (defun htb-test-authed-client ()
   "Connect, say hello, send two tabs, and wait until the server has them."
   (let ((client (htb-test-connect)))
     (htb-test-hello client)
     (should (htb-test-wait
-             (lambda () (equal (alist-get 'type (car (htb-client-messages client)))
-                               "welcome"))))
+             (lambda () (htb-test-message-of-type client "welcome"))))
     (htb-test-send client
                    '((type . "tabs")
                      (tabs . [((id . 1) (windowId . 10) (title . "Older")
@@ -113,6 +134,7 @@
       (htb-test-hello client "not-the-token")
       (should (htb-test-wait (lambda () (htb-client-closed client))))
       (should (equal (alist-get 'type (htb-test-last-message client)) "error"))
+      (should-not (htb-test-message-of-type client "welcome"))
       (should (null (helm-taskswitch-browser-clients))))))
 
 (ert-deftest htb-wrong-protocol-is-closed ()
@@ -120,9 +142,78 @@
     (let ((client (htb-test-connect)))
       (htb-test-hello client nil 99)
       (should (htb-test-wait (lambda () (htb-client-closed client))))
-      (should (string-match-p "protocol"
+      (should (string-match-p "protocol 99.*install"
                               (alist-get 'message
                                          (htb-test-last-message client)))))))
+
+;;;; Proving the token
+
+(ert-deftest htb-hmac-matches-rfc-4231 ()
+  ;; RFC 4231 test case 2.
+  (should (equal (helm-taskswitch-browser--hmac "Jefe" "what do ya want for nothing?")
+                 "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843")))
+
+(ert-deftest htb-hmac-long-key-and-utf-8 ()
+  ;; Expected values from Node's crypto.createHmac("sha256", ...).
+  ;; Keys longer than the 64-byte block are hashed first.
+  (should (equal (helm-taskswitch-browser--hmac (make-string 100 ?k) "message")
+                 "1c28735416d320163f56f81bdbb83d651eed508d184e6b8b03662740a533293e"))
+  (should (equal (helm-taskswitch-browser--hmac "tök€n" "hé\nllo")
+                 "2995b62514299959fed432ab4c0a00ab0571c533baea67393a3586f61a898f3e")))
+
+(ert-deftest htb-challenge-is-sent-on-connect ()
+  (htb-test-with-server
+    (let* ((client (htb-test-connect))
+           (nonce (htb-test-challenge client))
+           (challenge (htb-test-message-of-type client "challenge")))
+      (should (string-match-p "\\`[0-9a-f]\\{32\\}\\'" nonce))
+      (should (equal (alist-get 'protocol challenge)
+                     helm-taskswitch-browser-protocol))
+      ;; Each connection gets its own nonce.
+      (should-not (equal nonce (htb-test-challenge (htb-test-connect)))))))
+
+(ert-deftest htb-welcome-proves-the-server-knows-the-token ()
+  (htb-test-with-server
+    (let* ((client (htb-test-connect))
+           (server-nonce (htb-test-challenge client)))
+      (htb-test-hello client)
+      (should (htb-test-wait (lambda () (htb-test-message-of-type client "welcome"))))
+      (should (equal (alist-get 'proof (htb-test-message-of-type client "welcome"))
+                     (helm-taskswitch-browser--hmac
+                      (helm-taskswitch-browser--token)
+                      (format "helm-taskswitch server\n%s\n%s"
+                              server-nonce htb-test-client-nonce)))))))
+
+(ert-deftest htb-proof-for-another-challenge-is-refused ()
+  ;; A proof recorded from one connection cannot be replayed on another.
+  (htb-test-with-server
+    (let* ((first (htb-test-connect))
+           (old-nonce (htb-test-challenge first))
+           (client (htb-test-connect)))
+      (htb-test-challenge client)
+      (htb-test-send client (htb-test-hello-message client nil nil old-nonce))
+      (should (htb-test-wait (lambda () (htb-client-closed client))))
+      (should-not (htb-test-message-of-type client "welcome")))))
+
+(ert-deftest htb-old-hello-with-token-is-refused ()
+  ;; Protocol 1 sent the token itself.
+  (htb-test-with-server
+    (let ((client (htb-test-connect)))
+      (htb-test-send client `((type . "hello") (browser . "test") (protocol . 1)
+                              (token . ,(helm-taskswitch-browser--token))))
+      (should (htb-test-wait (lambda () (htb-client-closed client))))
+      (should (string-match-p "protocol 1, Emacs speaks 2"
+                              (alist-get 'message (htb-test-last-message client))))
+      (should (null (helm-taskswitch-browser-clients))))))
+
+(ert-deftest htb-bad-client-nonce-is-refused ()
+  (htb-test-with-server
+    (let ((client (htb-test-connect)))
+      (htb-test-send client (cons '(nonce . "short")
+                                  (htb-test-hello-message client)))
+      (should (htb-test-wait (lambda () (htb-client-closed client))))
+      (should (equal (alist-get 'message (htb-test-last-message client))
+                     "bad nonce")))))
 
 (ert-deftest htb-message-before-hello-is-closed ()
   (htb-test-with-server
@@ -302,9 +393,8 @@
                     (push (apply #'format fmt args) messages)
                     (apply real-message fmt args))))
         (htb-test-send client
-                       `((type . "hello") (browser . "test") (protocol . 1)
-                         (token . ,(helm-taskswitch-browser--token))
-                         (extensionVersion . "0.2")))
+                       (cons '(extensionVersion . "0.2")
+                             (htb-test-hello-message client)))
         (should (htb-test-wait (lambda () (helm-taskswitch-browser-clients)))))
       ;; Still accepted, but told to update.
       (should (seq-some (lambda (m) (string-match-p "extension 0.2.*has 0.3.*install" m))
