@@ -41,10 +41,10 @@
 
 ;; Browser tabs: the extension in browser-extension/ sends every tab to
 ;; Emacs.  Install websocket.el, run M-x helm-taskswitch-browser-install
-;; and follow its steps, then turn on `helm-taskswitch-browser-mode' in
-;; your init file.  Tabs then show in their own section, most recently
-;; used first, with actions to switch to, close, reload, duplicate or
-;; mute them, or copy their URL.
+;; and follow its steps.  Tabs then show in their own section, most
+;; recently used first, with actions to switch to, close, reload,
+;; duplicate or mute them, or copy their URL.  Emacs starts listening
+;; for the extension the first time you run `helm-taskswitch'.
 
 ;; Usage:
 
@@ -327,7 +327,7 @@ The argument, the current candidate, is ignored; helm passes it."
 
 ;; Browser tabs.  The extension in browser-extension/ sends every tab to
 ;; Emacs over a WebSocket; helm-taskswitch-browser.el keeps the lists.
-;; Turn on `helm-taskswitch-browser-mode' to receive them.
+;; `helm-taskswitch' starts its server the first time it runs.
 
 (defvar helm-taskswitch--dir
   (file-name-directory (or load-file-name buffer-file-name default-directory))
@@ -342,6 +342,7 @@ The argument, the current candidate, is ignored; helm passes it."
   (error (message "helm-taskswitch: browser tabs unavailable: %s"
                   (error-message-string err))))
 
+(declare-function helm-taskswitch-browser-ensure-started "helm-taskswitch-browser")
 (declare-function helm-taskswitch-browser-tabs "helm-taskswitch-browser")
 (declare-function helm-taskswitch-browser-activate "helm-taskswitch-browser"
                   (tab &optional callback))
@@ -480,6 +481,9 @@ window is worse than raising none."
   "Use helm to switch between tasks (X11 windows, buffers or recentf)."
   (interactive)
   (run-hooks 'helm-taskswitch-open-hook)
+  ;; Listen for the browser extension, if browser tabs are set up.
+  (when (featurep 'helm-taskswitch-browser)
+    (helm-taskswitch-browser-ensure-started))
   (select-frame-set-input-focus (window-frame (selected-window)))
   (make-frame-visible)
   (unless helm-source-buffers-list

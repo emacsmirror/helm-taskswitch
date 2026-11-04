@@ -409,26 +409,71 @@ by default the one in the challenge CLIENT got."
                                    :type 'user-error)))))
     (should-not helm-taskswitch-browser--server)))
 
-(ert-deftest htb-mode-warns-instead-of-signaling-when-port-is-taken ()
-  ;; The test server holds the port, so a second server cannot listen.
+;;;; Starting the server by itself
+
+(defmacro htb-test-with-no-server (&rest body)
+  "Run BODY with no server running, the test port and a fresh token dir.
+In BODY, `dir' is that directory and `messages' lists the messages
+shown.  Any server BODY starts is stopped afterwards."
+  (declare (indent 0))
+  `(let* ((dir (make-temp-file "htb-test" t))
+          (helm-taskswitch-browser-port htb-test-port)
+          (helm-taskswitch-browser-token-file (expand-file-name "token" dir))
+          (helm-taskswitch-browser--server nil)
+          (helm-taskswitch-browser--start-error nil)
+          (helm-taskswitch-browser--clients (make-hash-table :test #'eq))
+          (helm-taskswitch-browser--callbacks (make-hash-table :test #'eql))
+          (messages nil))
+     (cl-letf* ((real-message (symbol-function 'message))
+                ((symbol-function 'message)
+                 (lambda (fmt &rest args)
+                   (push (apply #'format fmt args) messages)
+                   (apply real-message fmt args))))
+       (unwind-protect
+           (progn ,@body)
+         (helm-taskswitch-browser-stop)
+         (delete-directory dir t)))))
+
+(ert-deftest htb-ensure-started-waits-for-the-install ()
+  ;; No token file yet: tabs are not set up, so nothing listens.
+  (htb-test-with-no-server
+    (helm-taskswitch-browser-ensure-started)
+    (should-not helm-taskswitch-browser--server)
+    (should-not messages)))
+
+(ert-deftest htb-ensure-started-starts-once-set-up ()
+  (htb-test-with-no-server
+    (helm-taskswitch-browser--token)
+    (helm-taskswitch-browser-ensure-started)
+    (should helm-taskswitch-browser--server)
+    (let ((server helm-taskswitch-browser--server))
+      ;; Running it again keeps the same server.
+      (helm-taskswitch-browser-ensure-started)
+      (should (eq helm-taskswitch-browser--server server)))))
+
+(ert-deftest htb-ensure-started-port-taken-says-why-once ()
+  ;; Another server (another Emacs) holds the port.
   (htb-test-with-server
-    (let ((first-server helm-taskswitch-browser--server)
-          (helm-taskswitch-browser-mode nil)
-          (warnings nil))
-      (let ((helm-taskswitch-browser--server nil))
-        (cl-letf (((symbol-function 'display-warning)
-                   (lambda (type msg &rest _) (push (list type msg) warnings))))
-          (unwind-protect
-              (progn
-                ;; Must not signal, so the rest of an init file still loads.
-                (helm-taskswitch-browser-mode 1)
-                (should-not helm-taskswitch-browser-mode)
-                (should-not helm-taskswitch-browser--server))
-            (when helm-taskswitch-browser--server
-              (websocket-server-close helm-taskswitch-browser--server)))))
-      (should (equal (caar warnings) 'helm-taskswitch-browser))
-      (should (string-match-p "Cannot listen" (cadar warnings)))
+    (let ((first-server helm-taskswitch-browser--server))
+      (htb-test-with-no-server
+        (helm-taskswitch-browser--token)
+        ;; Must not signal: `helm-taskswitch' still opens, without tabs.
+        (helm-taskswitch-browser-ensure-started)
+        (helm-taskswitch-browser-ensure-started)
+        (should-not helm-taskswitch-browser--server)
+        (should (= (length messages) 1))
+        (should (string-match-p "no browser tabs: Cannot listen" (car messages)))
+        (should (string-match-p "Cannot listen" helm-taskswitch-browser--start-error)))
       ;; The server that holds the port is untouched.
       (should (eq helm-taskswitch-browser--server first-server)))))
+
+(ert-deftest htb-old-mode-calls-still-work ()
+  ;; Init files from 2.1.0 call (helm-taskswitch-browser-mode 1).
+  (htb-test-with-no-server
+    (helm-taskswitch-browser--token)
+    (with-no-warnings (helm-taskswitch-browser-mode 1))
+    (should helm-taskswitch-browser--server)
+    (with-no-warnings (helm-taskswitch-browser-mode -1))
+    (should-not helm-taskswitch-browser--server)))
 
 ;;; helm-taskswitch-browser-test.el ends here

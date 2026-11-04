@@ -396,8 +396,7 @@ async function handleMessage(data, sock) {
             console.error("[helm-taskswitch] Emacs is running an older " +
                           "helm-taskswitch. Load the new " +
                           "helm-taskswitch-browser.el and helm-taskswitch.el " +
-                          "in Emacs (or restart it), then turn " +
-                          "helm-taskswitch-browser-mode off and on. " +
+                          "in Emacs, or restart it. " +
                           `(Emacs said: ${msg.message})`);
         } else {
             console.error("[helm-taskswitch] Emacs refused the connection:",

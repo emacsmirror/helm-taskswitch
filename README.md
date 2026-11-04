@@ -118,12 +118,12 @@ tabs are exposed.
 ```elisp
 (add-to-list 'load-path "~/src/helm-taskswitch")
 (require 'helm-taskswitch)          ; also loads helm-taskswitch-browser
-(helm-taskswitch-browser-mode 1)    ; only needed for browser tabs
 ```
 
 Loading `helm-taskswitch.el` with `load-file` also works; it loads
 `helm-taskswitch-browser.el` from beside itself. If websocket.el is
-missing, the browser tabs section is just empty.
+missing, the browser tabs section is just empty. Browser tabs need no
+other line in your init file (see [Browser tabs](#browser-tabs-1)).
 
 ### Window backend
 
@@ -148,13 +148,17 @@ window fails with a D-Bus `ServiceUnknown` error. Set the backend to
 ## Browser tabs
 
 ```
-Chrome ── extension (browser-extension/) ── ws://127.0.0.1:62841 ── Emacs (helm-taskswitch-browser-mode)
+Chrome ── extension (browser-extension/) ── ws://127.0.0.1:62841 ── Emacs (helm-taskswitch-browser.el)
 ```
 
 The extension connects out to a small WebSocket server that Emacs runs,
 sends the list of tabs, and sends it again whenever tabs change. Emacs
 keeps the latest list, so Helm opens instantly. No native messaging
 helper program is needed.
+
+Emacs starts the server the first time you run `M-x helm-taskswitch`,
+once the install command below has been run. Until then nothing
+listens, so people who don't use browser tabs get no server.
 
 ### Setup
 
@@ -166,9 +170,9 @@ helper program is needed.
 3. Click **Load unpacked** and choose that directory. The extension ID
    must be `iofbocbifodmmplkphnmicpokfpgiodh` (the key in
    `manifest.json` fixes it).
-4. Turn on `helm-taskswitch-browser-mode` (see Installation).
-5. `M-x helm-taskswitch-browser-status` should show Chrome as
-   authenticated, with a tab count, within about a minute.
+4. `M-x helm-taskswitch-browser-status` should show Chrome as
+   authenticated, with a tab count, within about a minute. The install
+   command starts the server, so this works right away.
 
 The extension is copied out of the package because package.el deletes
 the package directory on every upgrade. **After upgrading
@@ -220,11 +224,14 @@ the browser, so the connection is locked down:
 
 ### Troubleshooting
 
-- **No tabs right after starting Emacs.** While Emacs is not running,
-  the extension only tries to connect about once a minute (each failed
-  try adds an error to its entry in `chrome://extensions`; that is
-  expected). It connects within about 90 seconds. After that it
-  reconnects within a second or two.
+- **No tabs the first time after starting Emacs.** The server starts
+  when you first run `M-x helm-taskswitch`. While nothing listens, the
+  extension only tries to connect about once a minute (each failed try
+  adds an error to its entry in `chrome://extensions`; that is
+  expected), so tabs show up within about 90 seconds of that. After
+  that it reconnects within a second or two. To have tabs ready
+  sooner, start the server from your init file:
+  `(helm-taskswitch-browser-ensure-started)`.
 - **Check the connection:** `M-x helm-taskswitch-browser-status` lists
   connected browsers, the extension version, and when the tab list was
   last updated.
@@ -237,15 +244,18 @@ the browser, so the connection is locked down:
 - **"Emacs is running an older helm-taskswitch"** in the extension's
   service worker console: the extension was updated but Emacs still
   has the old code loaded. Load the new `helm-taskswitch-browser.el`
-  and `helm-taskswitch.el` (or restart Emacs), then turn
-  `helm-taskswitch-browser-mode` off and on.
+  and `helm-taskswitch.el`, or restart Emacs.
 - **"did not prove it knows the token; not trusting it"** in the
   extension's service worker console: something other than this Emacs
   answered on the port, or it has a different token file.
 - **Port in use:** only one Emacs can run the server. In a second
-  Emacs, `helm-taskswitch-browser-mode` shows a warning and stays off.
-  To use a different port, change `helm-taskswitch-browser-port`, then
-  run the install command again and reload the extension.
+  Emacs, `M-x helm-taskswitch` says once that there are no browser
+  tabs and why, then works without them; `M-x
+  helm-taskswitch-browser-status` shows the reason too. To use a
+  different port, change `helm-taskswitch-browser-port`, then run the
+  install command again and reload the extension.
+- **Upgrading from 2.1.0:** `(helm-taskswitch-browser-mode 1)` in an
+  init file still works but is no longer needed; you can remove it.
 - **"no window matches tab ...":** with the `kwin` backend, Emacs
   raises the window whose title is the tab's title plus a browser
   ending such as ` - Google Chrome`. If your browser's window titles

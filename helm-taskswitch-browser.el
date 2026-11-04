@@ -39,9 +39,11 @@
 ;;   2. In chrome://extensions, turn on Developer mode, then "Load
 ;;      unpacked" and choose that directory.  After upgrading this
 ;;      package, run the install command again and reload the extension.
-;;   3. Turn on `helm-taskswitch-browser-mode' (in your init file, so it
-;;      is on whenever Emacs runs).
-;;   4. M-x helm-taskswitch-browser-status shows connected browsers.
+;;   3. M-x helm-taskswitch-browser-status shows connected browsers.
+;;
+;; Emacs starts listening for the extension the first time you run
+;; M-x helm-taskswitch, once the install command has made the token.
+;; Nothing needs to go in your init file.
 ;;
 ;; Security: the server only listens on 127.0.0.1.  A connection must
 ;; come from an allowed extension origin (web pages cannot fake the
@@ -407,25 +409,40 @@ The time taken does not depend on where they differ."
   (clrhash helm-taskswitch-browser--clients)
   (clrhash helm-taskswitch-browser--callbacks))
 
-;;;###autoload
-(define-minor-mode helm-taskswitch-browser-mode
-  "Accept tab lists from the helm-taskswitch browser extension.
-Runs a WebSocket server on 127.0.0.1, port
-`helm-taskswitch-browser-port'.  If the server cannot start, the
-mode stays off and a warning says why."
-  :global t
-  :group 'helm-taskswitch-browser
-  (if helm-taskswitch-browser-mode
-      ;; Warn instead of signaling: this is usually turned on from an
-      ;; init file, and an error there would stop the rest of it loading.
-      (condition-case err
+(defvar helm-taskswitch-browser--start-error nil
+  "Why the server last failed to start, or nil.")
+
+(defun helm-taskswitch-browser-ensure-started ()
+  "Start the server if browser tabs are set up and it is not running.
+Tabs are set up once `helm-taskswitch-browser-install' has made the
+token file; until then nothing is started.  `helm-taskswitch' calls
+this, so it must not signal: if the server cannot start (for example
+another Emacs has the port), say why once and carry on without tabs."
+  (when (and (not helm-taskswitch-browser--server)
+             (file-exists-p helm-taskswitch-browser-token-file))
+    (condition-case err
+        (progn
           (helm-taskswitch-browser-start)
-        (error
-         (setq helm-taskswitch-browser-mode nil)
-         (display-warning 'helm-taskswitch-browser
-                          (format "Not started: %s"
-                                  (error-message-string err)))))
-    (helm-taskswitch-browser-stop)))
+          (setq helm-taskswitch-browser--start-error nil))
+      (error
+       (let ((reason (error-message-string err)))
+         (unless (equal reason helm-taskswitch-browser--start-error)
+           (message "helm-taskswitch-browser: no browser tabs: %s" reason))
+         (setq helm-taskswitch-browser--start-error reason))))))
+
+;;;###autoload
+(defun helm-taskswitch-browser-mode (&optional arg)
+  "Start the server, or stop it when ARG is zero or negative.
+This used to be a minor mode.  The server now starts by itself the
+first time `helm-taskswitch' runs, so calls to this in init files
+are no longer needed; it is kept so that they keep working."
+  (interactive)
+  (if (and (numberp arg) (<= arg 0))
+      (helm-taskswitch-browser-stop)
+    (helm-taskswitch-browser-ensure-started)))
+(make-obsolete 'helm-taskswitch-browser-mode
+               "the server starts when `helm-taskswitch' first runs."
+               "2.2.0")
 
 ;;;; Using the tabs and sending commands
 
@@ -521,6 +538,7 @@ switched, as for `helm-taskswitch-browser-send'."
   "Open URL in a new tab of the most recently heard from browser."
   (interactive
    (list (read-string "Open URL in browser: " (thing-at-point 'url t))))
+  (helm-taskswitch-browser-ensure-started)
   (let ((ws (car (helm-taskswitch-browser-clients))))
     (unless ws
       (user-error "No browser is connected"))
@@ -564,6 +582,8 @@ self.HELM_TASKSWITCH_CONFIG = {port: %d, token: %S};
                helm-taskswitch-browser-port
                (helm-taskswitch-browser--token))
        nil config nil 'silent))
+    ;; Listen now, so the extension connects as soon as it is loaded.
+    (helm-taskswitch-browser-ensure-started)
     (with-help-window "*helm-taskswitch-browser install*"
       (princ (if in-place
                  (format "Wrote %s\n\n" config)
@@ -577,10 +597,13 @@ self.HELM_TASKSWITCH_CONFIG = {port: %d, token: %S};
                      (string-remove-prefix
                       "chrome-extension://"
                       (car helm-taskswitch-browser-allowed-origins))))
-      (princ "  4. Turn on helm-taskswitch-browser-mode, e.g. in your init file:\n")
-      (princ "       (helm-taskswitch-browser-mode 1)\n")
-      (princ "  5. M-x helm-taskswitch-browser-status should show the browser\n")
-      (princ "     within about 30 seconds.\n"))))
+      (princ "  4. M-x helm-taskswitch-browser-status should show the browser\n")
+      (princ "     within about 30 seconds.\n\n")
+      (princ (if helm-taskswitch-browser--server
+                 "Emacs is listening for the extension now.  In later sessions it
+starts listening the first time you run M-x helm-taskswitch.\n"
+               (format "Emacs could not start listening: %s\n"
+                       helm-taskswitch-browser--start-error))))))
 
 (defun helm-taskswitch-browser--ago (time)
   "Describe how long ago TIME was."
@@ -593,10 +616,16 @@ self.HELM_TASKSWITCH_CONFIG = {port: %d, token: %S};
   "Show the server and the connected browsers."
   (interactive)
   (with-help-window "*helm-taskswitch-browser status*"
-    (princ (if helm-taskswitch-browser--server
-               (format "Listening on 127.0.0.1:%d\n\n"
-                       helm-taskswitch-browser-port)
-             "Not running; turn on helm-taskswitch-browser-mode.\n\n"))
+    (princ (cond (helm-taskswitch-browser--server
+                  (format "Listening on 127.0.0.1:%d\n\n"
+                          helm-taskswitch-browser-port))
+                 (helm-taskswitch-browser--start-error
+                  (format "Not running: %s\n\n"
+                          helm-taskswitch-browser--start-error))
+                 ((not (file-exists-p helm-taskswitch-browser-token-file))
+                  "Not running; run M-x helm-taskswitch-browser-install first.\n\n")
+                 (t
+                  "Not running yet; it starts the first time you run M-x helm-taskswitch.\n\n")))
     (if (zerop (hash-table-count helm-taskswitch-browser--clients))
         (princ "No connections.\n")
       (maphash
