@@ -43,6 +43,13 @@
 ;; (the default when XDG_SESSION_TYPE is wayland) to list windows
 ;; through KWin's D-Bus interface instead.
 
+;; Browser tabs: the extension in browser-extension/ sends every tab to
+;; Emacs.  Install websocket.el, run M-x helm-taskswitch-browser-install
+;; and follow its steps, then turn on `helm-taskswitch-browser-mode' in
+;; your init file.  Tabs then show in their own section, most recently
+;; used first, with actions to switch to, close, reload, duplicate or
+;; mute them, or copy their URL.
+
 ;; ## Usage
 
 ;; To activate use `M-x helm-task-switcher'.
@@ -91,6 +98,7 @@
 (require 'helm-for-files) ;; needed for helm-source-recentf
 (require 'dbus)
 (require 'seq)
+(require 'subr-x)
 
 ;; Customisable variables.
 
@@ -292,78 +300,101 @@ Uses the window runner that KRunner uses.  Each match is
       "Helm source that provides X windows and actions.")
 
 
-;; Browser tabs from KDE Plasma Browser Integration.  This needs the
-;; "Plasma Integration" browser extension; its native host then serves
-;; the same krunner1 D-Bus interface that KRunner uses to search tabs.
+;; Browser tabs.  The extension in browser-extension/ sends every tab to
+;; Emacs over a WebSocket; helm-taskswitch-browser.el keeps the lists.
+;; Turn on `helm-taskswitch-browser-mode' to receive them.
 
-(defconst helm-taskswitch--tabs-service "org.kde.plasma.browser_integration")
+(defvar helm-taskswitch--dir
+  (file-name-directory (or load-file-name buffer-file-name default-directory))
+  "Directory this file was loaded from.")
 
-(defun helm-taskswitch--tabs (method &rest args)
-  "Call METHOD with ARGS on Plasma Browser Integration's tabs runner."
-  (apply #'dbus-call-method :session helm-taskswitch--tabs-service
-         "/TabsRunner" "org.kde.krunner1" method args))
+;; This file is often loaded with `load-file', so its directory may not
+;; be on `load-path'; load the browser part from beside it.  Without it
+;; (e.g. websocket.el is not installed) the tabs section is just empty.
+(condition-case err
+    (require 'helm-taskswitch-browser
+             (expand-file-name "helm-taskswitch-browser" helm-taskswitch--dir))
+  (error (message "helm-taskswitch: browser tabs unavailable: %s"
+                  (error-message-string err))))
 
-(defun helm-taskswitch--tabs-query ()
-  "Return the word of `helm-pattern' to send to the tabs runner, or nil.
-The runner treats its query as one string, so \"wom 80\" would match
-nothing.  Send only the longest word, which narrows the most, and
-let helm match the whole pattern against what comes back.  The
-runner refuses queries shorter than 3 characters."
-  (let ((word (car (sort (split-string helm-pattern " " t)
-                         (lambda (a b) (> (length a) (length b)))))))
-    (when (and word (>= (length word) 3))
-      ;; Drop helm's "!" negation prefix if that is the longest word.
-      (string-remove-prefix "!" word))))
+(declare-function helm-taskswitch-browser-tabs "helm-taskswitch-browser")
+(declare-function helm-taskswitch-browser-activate "helm-taskswitch-browser")
+(declare-function helm-taskswitch-browser-close "helm-taskswitch-browser")
+(declare-function helm-taskswitch-browser-reload "helm-taskswitch-browser")
+(declare-function helm-taskswitch-browser-duplicate "helm-taskswitch-browser")
+(declare-function helm-taskswitch-browser-toggle-muted "helm-taskswitch-browser")
+
+(defun helm-taskswitch--tab-label (tab)
+  "Return the label column for TAB, the name of its browser."
+  (let ((browser (alist-get 'browser tab)))
+    (propertize (pcase browser
+                  ("chrome" "Chrome")
+                  ("firefox" "Firefox")
+                  (_ (or browser "Browser")))
+                'face 'helm-taskswitch-browser-face)))
+
+(defun helm-taskswitch--tab-display (tab)
+  "Return the helm display string for TAB."
+  (let ((markers (concat (when (alist-get 'pinned tab) "📌")
+                         (cond ((alist-get 'muted tab) "🔇")
+                               ((alist-get 'audible tab) "🔊")))))
+    (format (format "%%-%d.%ds %%s%%s  %%s"
+                    helm-taskswitch-wmclass-width
+                    helm-taskswitch-wmclass-width)
+            (helm-taskswitch--tab-label tab)
+            (if (string-empty-p markers) "" (concat markers " "))
+            (helm-taskswitch-title tab)
+            (propertize (or (alist-get 'url tab) "")
+                        'face 'font-lock-comment-face))))
 
 (defun helm-taskswitch--browser-tab-candidates ()
-  "Return browser tabs for the longest word in `helm-pattern'.
-Helm then filters these with the full pattern."
-  (when-let ((query (helm-taskswitch--tabs-query))
-             ((member helm-taskswitch--tabs-service
-                      (dbus-list-names :session))))
-    (mapcar
-     (lambda (m)
-       ;; m is (ID TITLE ICON-NAME TYPE RELEVANCE PROPERTIES).
-       (let* ((url (car (cadr (assoc "subtext" (nth 5 m)))))
-              (al `((tab-id . ,(nth 0 m))
-                    (title . ,(nth 1 m))
-                    (wmclass . ,(nth 2 m))
-                    (url . ,url))))
-         (cons (format (format "%%-%d.%ds %%s  %%s"
-                               helm-taskswitch-wmclass-width
-                               helm-taskswitch-wmclass-width)
-                       (helm-taskswitch-wmclass al)
-                       (helm-taskswitch-title al)
-                       (propertize (or url "") 'face 'font-lock-comment-face))
-               al)))
-     (ignore-errors (helm-taskswitch--tabs "Match" query)))))
+  "Return all browser tabs as helm candidates, most recently used first."
+  (when (featurep 'helm-taskswitch-browser)
+    (mapcar (lambda (tab) (cons (helm-taskswitch--tab-display tab) tab))
+            (helm-taskswitch-browser-tabs))))
 
-(defun helm-taskswitch--browser-tab-activate (al)
-  "Switch to the browser tab AL and raise its window."
-  (helm-taskswitch--tabs "Run" (cdr (assoc 'tab-id al)) "")
+(defun helm-taskswitch--browser-tab-activate (tab)
+  "Switch to the browser TAB and raise its window."
+  (helm-taskswitch-browser-activate tab)
   ;; On Wayland the browser may not be allowed to raise its own window.
   ;; Once the tab is active the window title starts with the tab title,
   ;; so find that window and ask KWin to activate it.
   (when (eq helm-taskswitch-backend 'kwin)
     (sit-for 0.3)
-    (let* ((title (cdr (assoc 'title al)))
-           (win (seq-find (lambda (w)
-                            (string-prefix-p title (cdr (assoc 'title w))))
-                          (helm-taskswitch--kwin-list-windows))))
+    (let* ((title (alist-get 'title tab))
+           (win (and title
+                     (seq-find (lambda (w)
+                                 (string-prefix-p title (cdr (assoc 'title w))))
+                               (helm-taskswitch--kwin-list-windows)))))
       (when win
         (helm-taskswitch--kwin "Run" (cdr (assoc 'window-id win)) "")))))
+
+(defun helm-taskswitch--browser-tabs-close (_tab)
+  "Close the marked tabs, or the selected one."
+  (helm-taskswitch-browser-close (helm-marked-candidates)))
+
+(defun helm-taskswitch--browser-tab-copy-url (tab)
+  "Put the URL of TAB in the kill ring."
+  (let ((url (alist-get 'url tab)))
+    (kill-new url)
+    (message "Copied %s" url)))
+
+(defun helm-taskswitch--browser-tab-eww (tab)
+  "Open the URL of TAB in eww."
+  (eww (alist-get 'url tab)))
 
 (defvar helm-taskswitch-source-browser-tabs
   (helm-build-sync-source "Browser tabs"
     :candidates #'helm-taskswitch--browser-tab-candidates
-    ;; Fetch again on each change of the pattern, then let helm match
-    ;; the full pattern (fuzzy for one word, each word for several).
-    :volatile t
     :fuzzy-match t
-    :requires-pattern 3
     :action '(("Switch to tab" . helm-taskswitch--browser-tab-activate)
-              ("Copy URL" . (lambda (al) (kill-new (cdr (assoc 'url al)))))))
-  "Helm source of browser tabs from KDE Plasma Browser Integration.")
+              ("Close tab(s)" . helm-taskswitch--browser-tabs-close)
+              ("Copy URL" . helm-taskswitch--browser-tab-copy-url)
+              ("Reload" . helm-taskswitch-browser-reload)
+              ("Duplicate" . helm-taskswitch-browser-duplicate)
+              ("Mute/unmute" . helm-taskswitch-browser-toggle-muted)
+              ("Open URL in eww" . helm-taskswitch--browser-tab-eww)))
+  "Helm source of browser tabs sent by the helm-taskswitch extension.")
 
 
 ;;;###autoload
