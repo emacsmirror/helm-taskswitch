@@ -37,6 +37,20 @@
               '((browser . "chrome") (id . 1) (title) (url . "https://a.example/")))))
     (should (string-match-p "https://a.example/" row))))
 
+(ert-deftest hts-window-and-tab-rows-line-up ()
+  (let* ((helm-taskswitch-wmclass-width 8)
+         (window-row (car (helm-taskswitch-format-candidate
+                           '((wmclass . "google-chrome") (title . "Docs - Google Chrome")))))
+         (tab-row (helm-taskswitch--tab-display
+                   '((browser . "chrome") (title . "Docs") (url . "u")))))
+    ;; Same label, padded to the same width, in the same face.
+    (should (equal (substring window-row 0 9) "Chrome   "))
+    (should (equal (substring tab-row 0 9) "Chrome   "))
+    (should (eq (get-text-property 0 'face window-row)
+                'helm-taskswitch-label-browser))
+    (should (eq (get-text-property 0 'face tab-row)
+                'helm-taskswitch-label-browser))))
+
 (ert-deftest hts-wmctrl-focus-only-activates ()
   (let ((helm-taskswitch-backend 'wmctrl)
         (helm-taskswitch-wmctrl-path "/usr/bin/wmctrl")

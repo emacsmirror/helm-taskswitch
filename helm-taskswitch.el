@@ -171,10 +171,21 @@ It is called with the title and returns the string to show."
 (defun helm-taskswitch-format-candidate (al)
   "Format a candidate client window for the task switcher.
 AL is the associative list for a window."
-  (let* ((ddfmt (format "%d.%d" helm-taskswitch-wmclass-width helm-taskswitch-wmclass-width))
-         (wmtitlefmt (concat "%-" ddfmt "s %s"))
-         (windowstr (format wmtitlefmt (helm-taskswitch-wmclass al) (helm-taskswitch-title al))))
-    (cons windowstr (list al))))
+  (cons (concat (helm-taskswitch--label-column (helm-taskswitch-wmclass al))
+                " "
+                (helm-taskswitch-title al))
+        (list al)))
+
+(defun helm-taskswitch--label-column (label)
+  "Return LABEL padded or cut to `helm-taskswitch-wmclass-width'.
+Window rows and browser tab rows both start with this column, so
+they line up."
+  (let ((width helm-taskswitch-wmclass-width))
+    (format (format "%%-%d.%ds" width width) label)))
+
+(defun helm-taskswitch--browser-label (name)
+  "Return NAME, a browser's name, in the face for browser labels."
+  (propertize name 'face 'helm-taskswitch-label-browser))
 
 (defun helm-taskswitch-title (al)
   "Format the title of a window.
@@ -191,7 +202,7 @@ title is shown as empty."
     ;; The X11 names come from wmctrl; the others are the icon names
     ;; KWin reports for the `kwin' backend.
     (cond ((member wmclass '("google-chrome.Google-chrome" "google-chrome"))
-           (propertize "Chrome" 'face 'helm-taskswitch-label-browser))
+           (helm-taskswitch--browser-label "Chrome"))
           ((string-equal wmclass "terminator.Terminator")
            (propertize "Terminator" 'face 'helm-taskswitch-label-terminal))
           ((string-equal wmclass "utilities-terminal")
@@ -342,23 +353,21 @@ The argument, the current candidate, is ignored; helm passes it."
 (defun helm-taskswitch--tab-label (tab)
   "Return the label column for TAB, the name of its browser."
   (let ((browser (alist-get 'browser tab)))
-    (propertize (pcase browser
-                  ("chrome" "Chrome")
-                  ("firefox" "Firefox")
-                  (_ (or browser "Browser")))
-                'face 'helm-taskswitch-label-browser)))
+    (helm-taskswitch--browser-label (pcase browser
+                                      ("chrome" "Chrome")
+                                      ("firefox" "Firefox")
+                                      (_ (or browser "Browser"))))))
 
 (defun helm-taskswitch--tab-display (tab)
   "Return the helm display string for TAB."
   (let ((markers (concat (when (alist-get 'pinned tab) "📌")
                          (cond ((alist-get 'muted tab) "🔇")
                                ((alist-get 'audible tab) "🔊")))))
-    (format (format "%%-%d.%ds %%s%%s  %%s"
-                    helm-taskswitch-wmclass-width
-                    helm-taskswitch-wmclass-width)
-            (helm-taskswitch--tab-label tab)
+    (concat (helm-taskswitch--label-column (helm-taskswitch--tab-label tab))
+            " "
             (if (string-empty-p markers) "" (concat markers " "))
             (helm-taskswitch-title tab)
+            "  "
             (propertize (or (alist-get 'url tab) "")
                         'face 'font-lock-comment-face))))
 
