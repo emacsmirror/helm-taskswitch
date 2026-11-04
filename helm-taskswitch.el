@@ -1,6 +1,9 @@
 ;;; helm-taskswitch.el --- Use helm to switch windows, browser tabs and buffers  -*- lexical-binding: t -*-
 
+;; Copyright (C) 2016-2026 Brian Caruso
+
 ;; Author: Brian Caruso <briancaruso@gmail.com>
+;; Assisted-by: Claude:claude-opus-5-5
 ;; Maintainer: Brian Caruso <briancaruso@gmail.com>
 ;; Created: 2016-05-27
 ;; URL: https://github.com/bdc34/helm-taskswitch

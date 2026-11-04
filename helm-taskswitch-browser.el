@@ -1,11 +1,12 @@
 ;;; helm-taskswitch-browser.el --- Browser tabs for helm-taskswitch over a WebSocket  -*- lexical-binding: t -*-
 
+;; Copyright (C) 2026 Brian Caruso
+
 ;; Author: Brian Caruso <briancaruso@gmail.com>
+;; Assisted-by: Claude:claude-opus-5-5
 ;; Maintainer: Brian Caruso <briancaruso@gmail.com>
 ;; Created: 2026-11-03
 ;; URL: https://github.com/bdc34/helm-taskswitch
-;; Package-Version: 2.1.0
-;; Package-Requires: ((emacs "28.1") (websocket "1.15"))
 ;; Keywords: frames
 
 ;; This file is NOT part of GNU Emacs.
