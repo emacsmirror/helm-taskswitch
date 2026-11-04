@@ -250,6 +250,10 @@ The time taken does not depend on where they differ."
 
 (defun helm-taskswitch-browser--on-open (ws)
   "Check the origin of a new connection WS."
+  ;; websocket.el marks the listening server as noquery, but not the
+  ;; connections it accepts, so quitting Emacs asked about killing them.
+  ;; Dropping a browser connection is harmless: it reconnects later.
+  (set-process-query-on-exit-flag (websocket-conn ws) nil)
   (let ((origin (websocket-origin ws)))
     (puthash ws (list :origin-ok nil :authed nil :opened (current-time))
              helm-taskswitch-browser--clients)

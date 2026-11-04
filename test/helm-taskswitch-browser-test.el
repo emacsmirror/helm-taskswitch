@@ -294,6 +294,14 @@ by default the one in the challenge CLIENT got."
       ;; Each callback is used once.
       (should (null (gethash id helm-taskswitch-browser--callbacks))))))
 
+(ert-deftest htb-quitting-emacs-does-not-ask-about-connections ()
+  (htb-test-with-server
+    (htb-test-authed-client)
+    (should-not (process-query-on-exit-flag helm-taskswitch-browser--server))
+    (let ((conn (websocket-conn (car (helm-taskswitch-browser-clients)))))
+      (should (process-live-p conn))
+      (should-not (process-query-on-exit-flag conn)))))
+
 (ert-deftest htb-disconnect-drops-pending-callbacks ()
   (htb-test-with-server
     (let* ((client (htb-test-authed-client))
