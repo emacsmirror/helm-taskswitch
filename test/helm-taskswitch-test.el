@@ -32,6 +32,11 @@
     (should (equal (hts-test-ids (helm-taskswitch--tab-windows "Inbox" windows))
                    '("a" "b")))))
 
+(ert-deftest hts-tab-without-title-is-shown ()
+  (let ((row (helm-taskswitch--tab-display
+              '((browser . "chrome") (id . 1) (title) (url . "https://a.example/")))))
+    (should (string-match-p "https://a.example/" row))))
+
 (ert-deftest hts-wmctrl-focus-only-activates ()
   (let ((helm-taskswitch-backend 'wmctrl)
         (helm-taskswitch-wmctrl-path "/usr/bin/wmctrl")

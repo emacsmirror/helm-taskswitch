@@ -178,8 +178,9 @@ AL is the associative list for a window."
 
 (defun helm-taskswitch-title (al)
   "Format the title of a window.
-AL is an associative list for a window."
-  (let ((title   (cdr (assoc 'title   al))))
+AL is an associative list for a window or a browser tab.  A missing
+title is shown as empty."
+  (let ((title (or (cdr (assoc 'title al)) "")))
     (funcall helm-taskswitch-title-transform
              (replace-regexp-in-string "- Google Chrome" "" title))))
 
