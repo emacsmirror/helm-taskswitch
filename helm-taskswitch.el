@@ -38,7 +38,10 @@
 
 ;; ## Installation
 
-;; Install wmctrl and helm.
+;; Install wmctrl and helm.  On KDE Plasma under Wayland, wmctrl only
+;; sees XWayland windows, so set `helm-taskswitch-backend' to `kwin'
+;; (the default when XDG_SESSION_TYPE is wayland) to list windows
+;; through KWin's D-Bus interface instead.
 
 ;; ## Usage
 
@@ -86,6 +89,8 @@
 
 (require 'helm)
 (require 'helm-for-files) ;; needed for helm-source-recentf
+(require 'dbus)
+(require 'seq)
 
 ;; Customisable variables.
 
@@ -97,6 +102,16 @@
 (defcustom helm-taskswitch-wmctrl-path "/usr/bin/wmctrl"
   "Absolute path to wmctrl executable."
   :type '(file :must-match t)
+  :group 'helm-taskswitch)
+
+(defcustom helm-taskswitch-backend
+  (if (equal (getenv "XDG_SESSION_TYPE") "wayland") 'kwin 'wmctrl)
+  "How to list and focus windows.
+`wmctrl' works on X11.  `kwin' uses KWin's D-Bus window runner and
+works on KDE Plasma under Wayland, where wmctrl only sees XWayland
+windows."
+  :type '(choice (const :tag "wmctrl (X11)" wmctrl)
+                 (const :tag "KWin D-Bus (KDE Wayland)" kwin))
   :group 'helm-taskswitch)
 
 (defcustom helm-taskswitch-title-transform 'identity
@@ -152,12 +167,20 @@
 
 (defun helm-taskswitch-wmclass (al)
   "Gets the WMCLASS for window AL associative list."
-  (let ((wmclass (cdr (assoc 'wmclass al))))
-    (cond ((string-equal wmclass "google-chrome.Google-chrome" )
+  (let ((wmclass (cdr (assoc 'wmclass al)))
+        (title (or (cdr (assoc 'title al)) "")))
+    ;; The X11 names come from wmctrl; the others are the icon names
+    ;; KWin reports for the `kwin' backend.
+    (cond ((member wmclass '("google-chrome.Google-chrome" "google-chrome"))
            (propertize "Chrome" 'face 'helm-taskswitch-browser-face ))
           ((string-equal wmclass "terminator.Terminator")
            (propertize "Terminator" 'face 'helm-taskswitch-term-face))
-          ((string-equal wmclass "emacs.Emacs")
+          ((string-equal wmclass "utilities-terminal")
+           (propertize "Terminal" 'face 'helm-taskswitch-term-face))
+          ((or (string-equal wmclass "emacs.Emacs")
+               ;; KWin gives Emacs an empty icon name.
+               (and (string-equal wmclass "")
+                    (string-match-p "GNU Emacs" title)))
            (propertize "Emacs" 'face 'helm-taskswitch-emacs-face))
           (t wmclass) )))
 
@@ -201,15 +224,42 @@
     (kill-buffer bfr)
     windows-list))
 
+(defun helm-taskswitch--kwin (method &rest args)
+  "Call METHOD with ARGS on KWin's D-Bus window runner."
+  (apply #'dbus-call-method :session "org.kde.KWin" "/WindowsRunner"
+         "org.kde.krunner1" method args))
+
+(defun helm-taskswitch--kwin-list-windows ()
+  "Internal function to get a list of desktop windows from KWin.
+Uses the window runner that KRunner uses.  Each match is
+\(ID TEXT ICON-NAME TYPE RELEVANCE PROPERTIES); ID looks like
+\"0_{uuid}\", where 0 means the activate action."
+  (let (seen windows)
+    (dolist (m (helm-taskswitch--kwin "Match" ""))
+      (let ((id (nth 0 m)))
+        ;; An empty query returns each window twice with the same id.
+        (unless (member id seen)
+          (push id seen)
+          (push `((window-id . ,id)
+                  (title . ,(nth 1 m))
+                  ;; An icon name, not a WM_CLASS.  Keep the last part
+                  ;; of reverse-DNS names: com.mitchellh.ghostty -> ghostty
+                  (wmclass . ,(car (last (split-string (nth 2 m) "\\.")))))
+                windows))))
+    (nreverse windows)))
+
 
 (defun helm-taskswitch-focus-window-by-candidate (al)
   "Internal function to focus the desktop window specified by AL, a window associative list."
-  (let* ((id (cdr (assoc 'window-id (car al))))
-         (desktop-id (cdr (assoc 'desktop-id (car al))))
-         (desktop-switch-cmd (concat helm-taskswitch-wmctrl-path " -s '" desktop-id "'"))
-         (window-switch-cmd (concat helm-taskswitch-wmctrl-path " -i -a '" id "'")))
-    (call-process-shell-command desktop-switch-cmd)
-    (call-process-shell-command window-switch-cmd)))
+  (let ((id (cdr (assoc 'window-id (car al)))))
+    (if (eq helm-taskswitch-backend 'kwin)
+        ;; KWin switches to the window's virtual desktop itself.
+        (helm-taskswitch--kwin "Run" id "")
+      (let ((desktop-id (cdr (assoc 'desktop-number (car al)))))
+        (call-process-shell-command
+         (concat helm-taskswitch-wmctrl-path " -s '" desktop-id "'"))
+        (call-process-shell-command
+         (concat helm-taskswitch-wmctrl-path " -i -a '" id "'"))))))
 
 
 (defun helm-taskswitch-close-candidate (al)
@@ -221,11 +271,16 @@
 
 (defun helm-taskswitch-close-candidates (_al)
   "Closes all selected candidates.  AL is ignored but seems to be needed by helm."
+  (when (eq helm-taskswitch-backend 'kwin)
+    (user-error "helm-taskswitch: closing windows is not supported with the kwin backend yet"))
   (mapc 'helm-taskswitch-close-candidate (helm-marked-candidates)))
-  
+
 (defun helm-taskswitch-client-candidates ()
   "Return a list windows with title and wmclass."
-  (mapcar 'helm-taskswitch-format-candidate (helm-taskswitch--list-windows)))
+  (mapcar 'helm-taskswitch-format-candidate
+          (if (eq helm-taskswitch-backend 'kwin)
+              (helm-taskswitch--kwin-list-windows)
+            (helm-taskswitch--list-windows))))
 
 (defvar helm-taskswitch-source-x-windows
       (helm-build-sync-source "X Windows"
@@ -235,6 +290,80 @@
                   ("Close window(s)" . helm-taskswitch-close-candidates)
                   ("dump client window s-exp" . prin1 )))
       "Helm source that provides X windows and actions.")
+
+
+;; Browser tabs from KDE Plasma Browser Integration.  This needs the
+;; "Plasma Integration" browser extension; its native host then serves
+;; the same krunner1 D-Bus interface that KRunner uses to search tabs.
+
+(defconst helm-taskswitch--tabs-service "org.kde.plasma.browser_integration")
+
+(defun helm-taskswitch--tabs (method &rest args)
+  "Call METHOD with ARGS on Plasma Browser Integration's tabs runner."
+  (apply #'dbus-call-method :session helm-taskswitch--tabs-service
+         "/TabsRunner" "org.kde.krunner1" method args))
+
+(defun helm-taskswitch--tabs-query ()
+  "Return the word of `helm-pattern' to send to the tabs runner, or nil.
+The runner treats its query as one string, so \"wom 80\" would match
+nothing.  Send only the longest word, which narrows the most, and
+let helm match the whole pattern against what comes back.  The
+runner refuses queries shorter than 3 characters."
+  (let ((word (car (sort (split-string helm-pattern " " t)
+                         (lambda (a b) (> (length a) (length b)))))))
+    (when (and word (>= (length word) 3))
+      ;; Drop helm's "!" negation prefix if that is the longest word.
+      (string-remove-prefix "!" word))))
+
+(defun helm-taskswitch--browser-tab-candidates ()
+  "Return browser tabs for the longest word in `helm-pattern'.
+Helm then filters these with the full pattern."
+  (when-let ((query (helm-taskswitch--tabs-query))
+             ((member helm-taskswitch--tabs-service
+                      (dbus-list-names :session))))
+    (mapcar
+     (lambda (m)
+       ;; m is (ID TITLE ICON-NAME TYPE RELEVANCE PROPERTIES).
+       (let* ((url (car (cadr (assoc "subtext" (nth 5 m)))))
+              (al `((tab-id . ,(nth 0 m))
+                    (title . ,(nth 1 m))
+                    (wmclass . ,(nth 2 m))
+                    (url . ,url))))
+         (cons (format (format "%%-%d.%ds %%s  %%s"
+                               helm-taskswitch-wmclass-width
+                               helm-taskswitch-wmclass-width)
+                       (helm-taskswitch-wmclass al)
+                       (helm-taskswitch-title al)
+                       (propertize (or url "") 'face 'font-lock-comment-face))
+               al)))
+     (ignore-errors (helm-taskswitch--tabs "Match" query)))))
+
+(defun helm-taskswitch--browser-tab-activate (al)
+  "Switch to the browser tab AL and raise its window."
+  (helm-taskswitch--tabs "Run" (cdr (assoc 'tab-id al)) "")
+  ;; On Wayland the browser may not be allowed to raise its own window.
+  ;; Once the tab is active the window title starts with the tab title,
+  ;; so find that window and ask KWin to activate it.
+  (when (eq helm-taskswitch-backend 'kwin)
+    (sit-for 0.3)
+    (let* ((title (cdr (assoc 'title al)))
+           (win (seq-find (lambda (w)
+                            (string-prefix-p title (cdr (assoc 'title w))))
+                          (helm-taskswitch--kwin-list-windows))))
+      (when win
+        (helm-taskswitch--kwin "Run" (cdr (assoc 'window-id win)) "")))))
+
+(defvar helm-taskswitch-source-browser-tabs
+  (helm-build-sync-source "Browser tabs"
+    :candidates #'helm-taskswitch--browser-tab-candidates
+    ;; Fetch again on each change of the pattern, then let helm match
+    ;; the full pattern (fuzzy for one word, each word for several).
+    :volatile t
+    :fuzzy-match t
+    :requires-pattern 3
+    :action '(("Switch to tab" . helm-taskswitch--browser-tab-activate)
+              ("Copy URL" . (lambda (al) (kill-new (cdr (assoc 'url al)))))))
+  "Helm source of browser tabs from KDE Plasma Browser Integration.")
 
 
 ;;;###autoload
@@ -248,6 +377,7 @@
    (setq helm-source-buffers-list
           (helm-make-source "Buffers" 'helm-source-buffers)))
   (helm :sources '(helm-taskswitch-source-x-windows
+                   helm-taskswitch-source-browser-tabs
                    helm-source-buffers-list
                    helm-source-recentf
                    ;;helm-chrome-history-source
