@@ -390,8 +390,19 @@ async function handleMessage(data, sock) {
         return;
     }
     if (msg.type === "error") {
-        console.error("[helm-taskswitch] Emacs refused the connection:",
-                      msg.message);
+        if (!sock.serverNonce) {
+            // Emacs refused us without sending a challenge first, so it
+            // speaks protocol 1 and timed out waiting for a hello.
+            console.error("[helm-taskswitch] Emacs is running an older " +
+                          "helm-taskswitch. Load the new " +
+                          "helm-taskswitch-browser.el and helm-taskswitch.el " +
+                          "in Emacs (or restart it), then turn " +
+                          "helm-taskswitch-browser-mode off and on. " +
+                          `(Emacs said: ${msg.message})`);
+        } else {
+            console.error("[helm-taskswitch] Emacs refused the connection:",
+                          msg.message);
+        }
         sock.refused = true;
         return;
     }

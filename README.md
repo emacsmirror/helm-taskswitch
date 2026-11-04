@@ -234,6 +234,11 @@ the browser, so the connection is locked down:
 - **"connected with extension X, but this package has Y"**, or
   **"protocol 1, Emacs speaks 2"**: run
   `M-x helm-taskswitch-browser-install` and reload the extension.
+- **"Emacs is running an older helm-taskswitch"** in the extension's
+  service worker console: the extension was updated but Emacs still
+  has the old code loaded. Load the new `helm-taskswitch-browser.el`
+  and `helm-taskswitch.el` (or restart Emacs), then turn
+  `helm-taskswitch-browser-mode` off and on.
 - **"did not prove it knows the token; not trusting it"** in the
   extension's service worker console: something other than this Emacs
   answered on the port, or it has a different token file.
