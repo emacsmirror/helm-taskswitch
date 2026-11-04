@@ -302,6 +302,10 @@ Keys: :origin-ok, :authed, :browser, :started-at, :opened, :last-seen,
 (defun helm-taskswitch-browser-start ()
   "Start the WebSocket server on 127.0.0.1."
   (interactive)
+  ;; Emacs 28 and 29 have the native JSON functions only when built with
+  ;; libjansson.  Without them every message would fail to parse.
+  (unless (json-available-p)
+    (user-error "This Emacs has no native JSON support (built without libjansson), which helm-taskswitch-browser needs"))
   (unless helm-taskswitch-browser--server
     (setq helm-taskswitch-browser--server
           (condition-case err

@@ -284,6 +284,15 @@
       (should (seq-some (lambda (m) (string-match-p "extension 0.2.*has 0.3.*install" m))
                         messages)))))
 
+(ert-deftest htb-start-without-json-is-a-clear-error ()
+  (let ((helm-taskswitch-browser--server nil))
+    (cl-letf (((symbol-function 'json-available-p) #'ignore))
+      (should (string-match-p
+               "libjansson"
+               (cadr (should-error (helm-taskswitch-browser-start)
+                                   :type 'user-error)))))
+    (should-not helm-taskswitch-browser--server)))
+
 (ert-deftest htb-mode-warns-instead-of-signaling-when-port-is-taken ()
   ;; The test server holds the port, so a second server cannot listen.
   (htb-test-with-server
