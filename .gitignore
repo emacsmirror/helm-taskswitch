@@ -1,0 +1,3 @@
+*.elc
+# Written by M-x helm-taskswitch-browser-install; holds the secret token.
+browser-extension/config.js
