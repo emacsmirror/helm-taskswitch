@@ -203,6 +203,32 @@
       ;; Each callback is used once.
       (should (null (gethash id helm-taskswitch-browser--callbacks))))))
 
+(ert-deftest htb-disconnect-drops-pending-callbacks ()
+  (htb-test-with-server
+    (let* ((client (htb-test-authed-client))
+           (id (helm-taskswitch-browser-send
+                (car (helm-taskswitch-browser-clients)) "refresh" nil
+                #'ignore)))
+      (should (gethash id helm-taskswitch-browser--callbacks))
+      (websocket-close (htb-client-ws client))
+      (should (htb-test-wait (lambda () (zerop (htb-test-server-client-count)))))
+      (should (zerop (hash-table-count helm-taskswitch-browser--callbacks))))))
+
+(ert-deftest htb-reply-from-another-browser-is-ignored ()
+  (htb-test-with-server
+    (let* ((first (htb-test-authed-client))
+           (first-ws (car (helm-taskswitch-browser-clients)))
+           (second (htb-test-authed-client))
+           (reply nil)
+           (id (helm-taskswitch-browser-send first-ws "refresh" nil
+                                             (lambda (msg) (setq reply msg)))))
+      (htb-test-send second `((type . "reply") (id . ,id) (ok . t)))
+      (sit-for 0.2)
+      (should-not reply)
+      (should (gethash id helm-taskswitch-browser--callbacks))
+      (htb-test-send first `((type . "reply") (id . ,id) (ok . t)))
+      (should (htb-test-wait (lambda () reply))))))
+
 (ert-deftest htb-disconnect-forgets-tabs ()
   (htb-test-with-server
     (let ((client (htb-test-authed-client)))

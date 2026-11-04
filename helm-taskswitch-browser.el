@@ -136,7 +136,8 @@ Keys: :origin-ok, :authed, :browser, :started-at, :opened, :last-seen,
   "Id of the last command sent.")
 
 (defvar helm-taskswitch-browser--callbacks (make-hash-table :test #'eql)
-  "Command id -> function called with the reply.")
+  "Command id -> (WEBSOCKET . FUNCTION).
+FUNCTION is called with the reply, which must come from WEBSOCKET.")
 
 (defun helm-taskswitch-browser--log (fmt &rest args)
   "Log FMT with ARGS when `helm-taskswitch-browser-log' is on."
@@ -224,6 +225,14 @@ Keys: :origin-ok, :authed, :browser, :started-at, :opened, :last-seen,
     (when (plist-get state :authed)
       (message "helm-taskswitch-browser: %s disconnected"
                (plist-get state :browser))))
+  ;; Its replies will never come, so drop the callbacks waiting for them.
+  (let (pending)
+    (maphash (lambda (id entry)
+               (when (eq (car entry) ws)
+                 (push id pending)))
+             helm-taskswitch-browser--callbacks)
+    (dolist (id pending)
+      (remhash id helm-taskswitch-browser--callbacks)))
   (remhash ws helm-taskswitch-browser--clients))
 
 (defun helm-taskswitch-browser--on-error (_ws type err)
@@ -291,8 +300,11 @@ Keys: :origin-ok, :authed, :browser, :started-at, :opened, :last-seen,
      ((equal type "ping"))
      ((equal type "reply")
       (let* ((id (alist-get 'id msg))
-             (callback (gethash id helm-taskswitch-browser--callbacks)))
-        (remhash id helm-taskswitch-browser--callbacks)
+             (entry (gethash id helm-taskswitch-browser--callbacks))
+             ;; Only the browser the command went to may answer it.
+             (callback (and (eq (car entry) ws) (cdr entry))))
+        (when callback
+          (remhash id helm-taskswitch-browser--callbacks))
         (cond (callback (funcall callback msg))
               ((not (alist-get 'ok msg))
                (message "helm-taskswitch-browser: %s"
@@ -392,7 +404,7 @@ error reply is shown with `message'.  Return the command id."
   (let ((id (setq helm-taskswitch-browser--next-id
                   (1+ helm-taskswitch-browser--next-id))))
     (when callback
-      (puthash id callback helm-taskswitch-browser--callbacks))
+      (puthash id (cons ws callback) helm-taskswitch-browser--callbacks))
     (helm-taskswitch-browser--send-json
      ws `((type . "cmd") (id . ,id) (cmd . ,cmd) ,@args))
     id))
